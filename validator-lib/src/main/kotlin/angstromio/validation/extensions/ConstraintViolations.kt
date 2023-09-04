@@ -8,13 +8,7 @@ import jakarta.validation.ConstraintViolation
 import jakarta.validation.Payload
 import org.hibernate.validator.engine.HibernateConstraintViolation
 
-fun ConstraintViolation<*>.getMessageWithPath(): String =
-    ConstraintViolationFactory.getMessage(this)
-
-fun <T: Any> Collection<ConstraintViolation<T>>.sortedSet(): Set<ConstraintViolation<T>> =
-    ConstraintViolationFactory.sortedSet(this)
-
-fun <T: Any> Collection<ConstraintViolation<T>>.sorted(): List<ConstraintViolation<T>> =
+fun <T : Any> Collection<ConstraintViolation<T>>.sorted(): List<ConstraintViolation<T>> =
     ConstraintViolationFactory.sorted(this.toSet())
 
 inline fun <reified P : Payload> ConstraintViolation<*>.getDynamicPayload(clazz: Class<P>): P? {

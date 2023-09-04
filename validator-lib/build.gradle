@@ -54,7 +54,7 @@ jacocoTestReport {
     }
     afterEvaluate {
         classDirectories.setFrom(files(classDirectories.files.collect {
-            fileTree(dir: it, exclude: ['**/MethodValidationConstraintDescriptor**', '**/ConstraintDescriptorFactory**'])
+            fileTree(dir: it, exclude: ['**/MethodValidationConstraintDescriptor**', '**/ConstraintDescriptorFactory**', '**/PropertyDescriptor'])
         }))
     }
 }
