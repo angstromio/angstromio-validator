@@ -658,4 +658,9 @@ object testclasses {
     data class WithSecondaryConstructor(@Min(10) val one: Int, val two: Int) {
         constructor(three: String, @NotBlank four: String) : this(three.toInt(), four.toInt())
     }
+
+    data class AlwaysFailMethodValidation(val id: String) {
+        @MethodValidation(fields = ["id"])
+        fun checkId(): MethodValidationResult = throw RuntimeException("FORCED TEST EXCEPTION")
+    }
 }
