@@ -1,0 +1,25 @@
+plugins {
+    // Apply the foojay-resolver plugin to allow automatic download of JDKs
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
+}
+
+rootProject.name = 'angstromio-validator'
+include 'constraints-lib', 'validator-lib'
+
+// For Local
+if (file('../angstromio-util').exists()) {
+    includeBuild('../angstromio-util') {
+        dependencySubstitution {
+            substitute module('io.angstrom:angstromio-util') using project(':util-lib')
+        }
+    }
+}
+// for GitHub Actions
+if (file('angstromio-util').exists()) {
+    includeBuild('angstromio-util') {
+        dependencySubstitution {
+            substitute module('io.angstrom:angstromio-util') using project(':util-lib')
+        }
+    }
+}
+
