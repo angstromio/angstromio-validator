@@ -1,10 +1,10 @@
 package angstromio.validation.constraints
 
-import angstromio.validation.testclasses.CountryCodeArrayExample
-import angstromio.validation.testclasses.CountryCodeExample
-import angstromio.validation.testclasses.CountryCodeInvalidTypeExample
-import angstromio.validation.testclasses.CountryCodeListExample
 import angstromio.validation.DataClassValidator
+import angstromio.validation.TestClasses.CountryCodeArrayExample
+import angstromio.validation.TestClasses.CountryCodeExample
+import angstromio.validation.TestClasses.CountryCodeInvalidTypeExample
+import angstromio.validation.TestClasses.CountryCodeListExample
 import io.kotest.matchers.be
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.should
@@ -104,5 +104,5 @@ class ISO3166CountryCodeConstraintValidatorTest : ConstraintValidatorTest() {
     }
 
     private inline fun <reified T : Any> validate(value: Any?): Set<ConstraintViolation<T>> =
-        super.validate<CountryCode, T>(T::class, testFieldName, value)
+        super.validate<CountryCode, T>(T::class.java, testFieldName, value)
 }

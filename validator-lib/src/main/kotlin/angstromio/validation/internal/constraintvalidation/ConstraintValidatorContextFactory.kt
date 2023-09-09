@@ -13,11 +13,11 @@ internal class ConstraintValidatorContextFactory(private val validatorFactory: V
         constraintDescriptor: ConstraintDescriptor<*>
     ): ConstraintValidatorContext =
         ConstraintValidatorContextImpl(
-        validatorFactory.validatorFactoryScopedContext().clockProvider,
+        validatorFactory.validatorFactoryScopedContext.clockProvider,
         path,
         constraintDescriptor,
-        validatorFactory.validatorFactoryScopedContext().constraintValidatorPayload,
-        validatorFactory.validatorFactoryScopedContext().constraintExpressionLanguageFeatureLevel,
-        validatorFactory.validatorFactoryScopedContext().customViolationExpressionLanguageFeatureLevel
+        validatorFactory.validatorFactoryScopedContext.constraintValidatorPayload,
+        validatorFactory.validatorFactoryScopedContext.constraintExpressionLanguageFeatureLevel,
+        validatorFactory.validatorFactoryScopedContext.customViolationExpressionLanguageFeatureLevel
     )
 }

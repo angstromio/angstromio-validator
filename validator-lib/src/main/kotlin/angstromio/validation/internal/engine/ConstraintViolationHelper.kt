@@ -1,5 +1,6 @@
 package angstromio.validation.internal.engine
 
+import angstromio.validation.constraints.PostConstructValidation
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.ConstraintViolation
 import jakarta.validation.ConstraintViolationException
@@ -13,7 +14,7 @@ import org.hibernate.validator.internal.engine.constraintvalidation.ConstraintVi
 import org.hibernate.validator.internal.engine.path.PathImpl
 import java.util.*
 
-internal class ConstraintViolationFactory(private val validatorFactory: ValidatorFactoryInspector) {
+internal class ConstraintViolationHelper(private val validatorFactory: ValidatorFactoryInspector) {
 
     companion object {
         private const val MESSAGE_WITH_PATH_TEMPLATE = "%s: %s"
@@ -49,12 +50,37 @@ internal class ConstraintViolationFactory(private val validatorFactory: Validato
         return ConstraintViolationException(message, errors)
     }
 
+    /** Return a ConstraintViolation resulting from a PostConstructValidation failure */
+    fun <T: Any> newPostConstructValidationConstraintViolation(
+        constraint: PostConstructValidation,
+        message: String?,
+        path: PathImpl,
+        invalidValue: Any?,
+        rootClazz: Class<T>?,
+        root: T?,
+        leaf: Any?,
+        constraintDescriptor: ConstraintDescriptor<*>,
+        payload: Payload?
+    ): ConstraintViolation<T> =
+        newConstraintViolation(
+            messageTemplate = constraint.message,
+            interpolatedMessage = message,
+            path = path,
+            invalidValue = invalidValue,
+            rootClazz = rootClazz,
+            root = root,
+            leaf = leaf,
+            constraintDescriptor = constraintDescriptor,
+            payload = payload
+        )
+
     /**
      * Performs message interpolation given the constraint descriptor and constraint validator context
      * to create a set of [[ConstraintViolation]] from the given context and parameters.
      */
+    @Suppress("UNCHECKED_CAST")
     fun <T : Any> buildConstraintViolations(
-        rootClazz: Class<T>?,
+        rootClazz: Class<out T>?,
         root: T?,
         leaf: Any?,
         path: PathImpl,
@@ -72,7 +98,7 @@ internal class ConstraintViolationFactory(private val validatorFactory: Validato
             val constraintViolationCreationContext = constraintViolationCreationContexts[index]
             val messageTemplate = constraintViolationCreationContext.message
             val interpolatedMessage =
-                validatorFactory.messageInterpolator()
+                validatorFactory.messageInterpolator
                     .interpolate(
                         messageTemplate,
                         MessageInterpolatorContext(
@@ -92,7 +118,7 @@ internal class ConstraintViolationFactory(private val validatorFactory: Validato
                     interpolatedMessage,
                     path,
                     invalidValue,
-                    rootClazz,
+                    rootClazz as Class<T>,
                     root,
                     leaf,
                     constraintDescriptor,
@@ -106,11 +132,11 @@ internal class ConstraintViolationFactory(private val validatorFactory: Validato
     }
 
     /** Creates a new [ConstraintViolation] from the given context and parameters. */
-    fun <T : Any> newConstraintViolation(
+    private fun <T : Any> newConstraintViolation(
         messageTemplate: String,
         interpolatedMessage: String?,
         path: PathImpl,
-        invalidValue: Any,
+        invalidValue: Any?,
         rootClazz: Class<T>?,
         root: T?,
         leaf: Any?,
@@ -132,7 +158,7 @@ internal class ConstraintViolationFactory(private val validatorFactory: Validato
         )
 
     /** Creates a new [ConstraintViolation] from the given context and parameters. */
-    fun <T : Any> newConstraintViolation(
+    private fun <T : Any> newConstraintViolation(
         messageTemplate: String,
         interpolatedMessage: String,
         path: PathImpl,

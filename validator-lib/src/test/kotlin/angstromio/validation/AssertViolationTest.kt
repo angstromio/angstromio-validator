@@ -9,7 +9,6 @@ import io.kotest.matchers.nulls.beNull
 import io.kotest.matchers.should
 import io.kotest.matchers.shouldNot
 import jakarta.validation.ConstraintViolation
-import kotlin.reflect.KClass
 
 abstract class AssertViolationTest : FunSpec() {
 
@@ -47,7 +46,7 @@ abstract class AssertViolationTest : FunSpec() {
 
     fun <T : Any> assertViolations(
         obj: T,
-        groups: List<KClass<*>> = emptyList(),
+        groups: List<Class<*>> = emptyList(),
         withViolations: List<WithViolation<T>> = emptyList()
     ) {
         val violations: Set<ConstraintViolation<T>> = validator.validate(obj, *groups.toTypedArray())

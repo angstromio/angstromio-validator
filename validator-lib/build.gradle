@@ -34,6 +34,12 @@ java {
     withSourcesJar()
 }
 
+compileKotlin {
+    kotlinOptions {
+        freeCompilerArgs += ["-jvm-target=17", "-Xemit-jvm-type-annotations"]
+    }
+}
+
 tasks.named('test') {
     // Use JUnit5 Platform for unit tests.
     useJUnitPlatform()
@@ -54,7 +60,7 @@ jacocoTestReport {
     }
     afterEvaluate {
         classDirectories.setFrom(files(classDirectories.files.collect {
-            fileTree(dir: it, exclude: ['**/MethodValidationConstraintDescriptor**', '**/ConstraintDescriptorFactory**', '**/PropertyDescriptor'])
+            fileTree(dir: it, exclude: ['**/PostConstructValidationConstraintDescriptor**', '**/ConstraintDescriptorFactory**', '**/PropertyDescriptor'])
         }))
     }
 }
@@ -83,8 +89,10 @@ dependencies {
     implementation 'io.angstrom:angstromio-util:0.0.1-SNAPSHOT'
     implementation 'io.arrow-kt:arrow-core:1.2.0'
     implementation 'io.github.oshai:kotlin-logging-jvm:5.1.0'
+    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
     implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
     implementation 'org.jetbrains.kotlin:kotlin-reflect:1.9.10'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.10'
     runtimeOnly    'org.glassfish:jakarta.el:4.0.2'
     implementation 'org.slf4j:slf4j-api:2.0.7'
 
@@ -92,6 +100,9 @@ dependencies {
     testImplementation 'io.kotest:kotest-runner-junit5:5.6.2'
     testImplementation 'io.kotest:kotest-assertions-core:5.6.2'
     testImplementation 'io.kotest:kotest-property:5.6.2'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
 
     // Jackson Annotations in testing
     testImplementation 'com.fasterxml.jackson.core:jackson-annotations:2.15+'

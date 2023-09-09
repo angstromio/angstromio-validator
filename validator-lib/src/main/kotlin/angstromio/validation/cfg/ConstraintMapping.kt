@@ -1,7 +1,6 @@
 package angstromio.validation.cfg
 
 import jakarta.validation.ConstraintValidator
-import kotlin.reflect.KClass
 
 /**
  * Simple configuration class for defining constraint mappings for DataClassValidator configuration.
@@ -36,7 +35,7 @@ import kotlin.reflect.KClass
  * @note adding multiple constraint mappings for the same annotation type will result in a ValidationException being thrown.
  */
 data class ConstraintMapping(
-    val annotationClazz: KClass<out Annotation>,
-    val constraintValidator: KClass<out ConstraintValidator<out Annotation, *>>,
+    val annotationClazz: Class<out Annotation>,
+    val constraintValidator: Class<out ConstraintValidator<out Annotation, *>>,
     val includeExistingValidators: Boolean = true
 )

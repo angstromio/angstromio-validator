@@ -12,31 +12,31 @@ class ValidatorFactoryInspector(
     private val underlying: ValidatorFactoryImpl
 ) {
 
-    fun constraintHelper(): ConstraintHelper =
+    val constraintHelper: ConstraintHelper =
         underlying.constraintCreationContext.constraintHelper
 
-    fun constraintValidatorFactory(): ConstraintValidatorFactory =
+    val constraintValidatorFactory: ConstraintValidatorFactory =
         underlying.constraintValidatorFactory
 
-    fun validatorFactoryScopedContext(): ValidatorFactoryScopedContext =
+    val validatorFactoryScopedContext: ValidatorFactoryScopedContext =
         underlying.validatorFactoryScopedContext
 
-    fun messageInterpolator(): MessageInterpolator =
+    val messageInterpolator: MessageInterpolator =
         underlying.messageInterpolator
 
-    fun getConstraintCreationContext(): ConstraintCreationContext =
+    val  constraintCreationContext: ConstraintCreationContext =
         underlying.constraintCreationContext
 
-    fun getExecutableHelper(): ExecutableHelper {
+    val executableHelper: ExecutableHelper by lazy {
         val field: Field = ValidatorFactoryImpl::class.java.getDeclaredField("executableHelper")
         field.setAccessible(true)
-        return field.get(underlying) as ExecutableHelper
+        field.get(underlying) as ExecutableHelper
     }
 
-    fun getExecutableParameterNameProvider(): ExecutableParameterNameProvider =
+    val executableParameterNameProvider: ExecutableParameterNameProvider =
         underlying.executableParameterNameProvider
 
-    fun getMethodValidationConfiguration(): MethodValidationConfiguration =
+    val methodValidationConfiguration: MethodValidationConfiguration =
         underlying.methodValidationConfiguration
 
     /** Close underlying ValidatorFactoryImpl */

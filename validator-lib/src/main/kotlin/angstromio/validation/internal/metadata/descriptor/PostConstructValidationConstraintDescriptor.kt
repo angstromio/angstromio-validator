@@ -1,5 +1,6 @@
 package angstromio.validation.internal.metadata.descriptor
 
+import angstromio.validation.constraints.PostConstructValidation
 import jakarta.validation.ConstraintTarget
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.Payload
@@ -8,9 +9,9 @@ import jakarta.validation.metadata.ConstraintDescriptor
 import jakarta.validation.metadata.ValidateUnwrappedValue
 import java.util.*
 
-internal class MethodValidationConstraintDescriptor(private val annotation: angstromio.validation.MethodValidation) : ConstraintDescriptor<angstromio.validation.MethodValidation> {
+internal class PostConstructValidationConstraintDescriptor(private val annotation: PostConstructValidation) : ConstraintDescriptor<PostConstructValidation> {
 
-    override fun getAnnotation(): angstromio.validation.MethodValidation = annotation
+    override fun getAnnotation(): PostConstructValidation = annotation
 
     override fun getMessageTemplate(): String = annotation.message
 
@@ -28,7 +29,7 @@ internal class MethodValidationConstraintDescriptor(private val annotation: angs
 
     override fun getValidationAppliesTo(): ConstraintTarget = ConstraintTarget.PARAMETERS
 
-    override fun getConstraintValidatorClasses(): MutableList<Class<out ConstraintValidator<angstromio.validation.MethodValidation, *>>> = Collections.emptyList()
+    override fun getConstraintValidatorClasses(): MutableList<Class<out ConstraintValidator<PostConstructValidation, *>>> = Collections.emptyList()
 
     override fun getAttributes(): MutableMap<String, Any> {
         val target = mutableMapOf<String, Any>()

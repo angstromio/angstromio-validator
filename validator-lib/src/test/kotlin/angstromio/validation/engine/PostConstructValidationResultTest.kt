@@ -8,10 +8,10 @@ import io.kotest.matchers.shouldNot
 import jakarta.validation.Payload
 import org.junit.jupiter.api.assertThrows
 
-class MethodValidationResultTest : FunSpec({
-    test("MethodValidationResult#validIfTrue - thrown NonFatal exception will return Invalid") {
+class PostConstructValidationResultTest : FunSpec({
+    test("PostConstructValidationResult#validIfTrue - thrown NonFatal exception will return Invalid") {
         val payload = object : Payload {}
-        val result = MethodValidationResult.validIfTrue(
+        val result = PostConstructValidationResult.validIfTrue(
             { throw RuntimeException("FORCED TEST EXCEPTION") },
             { "Oh Noes!" },
             payload
@@ -19,12 +19,12 @@ class MethodValidationResultTest : FunSpec({
         result.isValid() should be(false)
         result.payload() shouldNot beNull()
         result.payload() should be(payload)
-        (result as MethodValidationResult.Invalid).message should be("FORCED TEST EXCEPTION")
+        (result as PostConstructValidationResult.Invalid).message should be("FORCED TEST EXCEPTION")
     }
 
-    test("MethodValidationResult#validIfTrue - thrown Fatal exception will escape") {
+    test("PostConstructValidationResult#validIfTrue - thrown Fatal exception will escape") {
         assertThrows<OutOfMemoryError> {
-            MethodValidationResult.validIfTrue(
+            PostConstructValidationResult.validIfTrue(
                 { throw OutOfMemoryError("FORCED TEST EXCEPTION") },
                 { "Oh Noes!" },
                 object : Payload {}
@@ -32,22 +32,22 @@ class MethodValidationResultTest : FunSpec({
         }
     }
 
-    test("MethodValidationResult#validIfTrue - returns Valid") {
-        val result = MethodValidationResult.validIfTrue(
+    test("PostConstructValidationResult#validIfTrue - returns Valid") {
+        val result = PostConstructValidationResult.validIfTrue(
             { true },
             { "This is it!" },
             object : Payload {}
         )
-        result should be(MethodValidationResult.Valid)
+        result should be(PostConstructValidationResult.Valid)
         result.isValid() should be(true)
         result.payload() should beNull() // Valid results have no payload
     }
 
-    test("MethodValidationResult#validIfTrue - returns Invalid") {
+    test("PostConstructValidationResult#validIfTrue - returns Invalid") {
         val payload = object : Payload {}
-        val expected = MethodValidationResult.Invalid("This is not it!", payload)
+        val expected = PostConstructValidationResult.Invalid("This is not it!", payload)
 
-        val result = MethodValidationResult.validIfTrue(
+        val result = PostConstructValidationResult.validIfTrue(
             { false },
             { "This is not it!" },
             payload
@@ -56,24 +56,24 @@ class MethodValidationResultTest : FunSpec({
         result.isValid() should be(false)
         result.payload() shouldNot beNull()
         result.payload() should be(expected.payload)
-        (result as MethodValidationResult.Invalid).message should be(expected.message)
+        (result as PostConstructValidationResult.Invalid).message should be(expected.message)
     }
 
-    test("MethodValidationResult#validIfFalse - thrown NonFatal exception will return Valid") {
+    test("PostConstructValidationResult#validIfFalse - thrown NonFatal exception will return Valid") {
         val payload = object : Payload {}
-        val result = MethodValidationResult.validIfFalse(
+        val result = PostConstructValidationResult.validIfFalse(
             { throw RuntimeException("FORCED TEST EXCEPTION") },
             { "Oh Noes!" },
             payload
         )
-        result should be(MethodValidationResult.Valid)
+        result should be(PostConstructValidationResult.Valid)
         result.isValid() should be(true)
         result.payload() should beNull() // Valid results have no payload
     }
 
-    test("MethodValidationResult#validIfFalse - thrown Fatal exception will escape") {
+    test("PostConstructValidationResult#validIfFalse - thrown Fatal exception will escape") {
         assertThrows<OutOfMemoryError> {
-            MethodValidationResult.validIfFalse(
+            PostConstructValidationResult.validIfFalse(
                 { throw OutOfMemoryError("FORCED TEST EXCEPTION") },
                 { "Oh Noes!" },
                 object : Payload {}
@@ -81,22 +81,22 @@ class MethodValidationResultTest : FunSpec({
         }
     }
 
-    test("MethodValidationResult#validIfFalse - returns Valid") {
-        val result = MethodValidationResult.validIfFalse(
+    test("PostConstructValidationResult#validIfFalse - returns Valid") {
+        val result = PostConstructValidationResult.validIfFalse(
             { false },
             { "This is correct!" },
             object : Payload {}
         )
-        result should be(MethodValidationResult.Valid)
+        result should be(PostConstructValidationResult.Valid)
         result.isValid() should be(true)
         result.payload() should beNull()// Valid results have no payload
     }
 
-    test("MethodValidationResult#validIfFalse - returns Invalid") {
+    test("PostConstructValidationResult#validIfFalse - returns Invalid") {
         val payload = object : Payload {}
-        val expected = MethodValidationResult.Invalid("This is not correct!", payload)
+        val expected = PostConstructValidationResult.Invalid("This is not correct!", payload)
 
-        val result = MethodValidationResult.validIfFalse(
+        val result = PostConstructValidationResult.validIfFalse(
             { true },
             { "This is not correct!" },
             payload
@@ -105,6 +105,6 @@ class MethodValidationResultTest : FunSpec({
         result.isValid() should be(false)
         result.payload() shouldNot beNull()
         result.payload() should be(expected.payload)
-        (result as MethodValidationResult.Invalid).message should be(expected.message)
+        (result as PostConstructValidationResult.Invalid).message should be(expected.message)
     }
 })

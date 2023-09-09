@@ -72,6 +72,7 @@ repositories {
 }
 
 dependencies {
+    implementation 'io.angstrom:angstromio-util:0.0.1-SNAPSHOT'
     implementation 'io.arrow-kt:arrow-core:1.2.0'
     implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
 }

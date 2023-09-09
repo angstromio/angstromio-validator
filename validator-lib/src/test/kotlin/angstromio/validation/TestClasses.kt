@@ -4,12 +4,13 @@ import angstromio.validation.constraints.ConsistentDateParameters
 import angstromio.validation.constraints.CountryCode
 import angstromio.validation.constraints.InvalidConstraint
 import angstromio.validation.constraints.OneOf
+import angstromio.validation.constraints.PostConstructValidation
 import angstromio.validation.constraints.StateConstraint
 import angstromio.validation.constraints.StateConstraintPayload
 import angstromio.validation.constraints.UUID
 import angstromio.validation.constraints.ValidPassengerCount
 import angstromio.validation.constraints.ValidPassengerCountReturnValue
-import angstromio.validation.engine.MethodValidationResult
+import angstromio.validation.engine.PostConstructValidationResult
 import com.fasterxml.jackson.annotation.JsonCreator
 import jakarta.validation.Payload
 import jakarta.validation.Valid
@@ -39,7 +40,9 @@ object OuterObject {
     }
 }
 
-object testclasses {
+object TestClasses {
+
+    data class SimpleClass(val name: String)
 
     /**
      * Represents the navigation path from an object to another in an object graph.
@@ -108,23 +111,23 @@ object testclasses {
 
     data class AlwaysFails(@InvalidConstraint val name: String)
 
-    data class AlwaysFailsMethodValidation(@NotEmpty val id: String) {
-        @MethodValidation(fields = ["id"])
-        fun checkId(): MethodValidationResult {
+    data class AlwaysFailsPostConstructValidation(@NotEmpty val id: String) {
+        @PostConstructValidation(fields = ["id"])
+        fun checkId(): PostConstructValidationResult {
             throw ValidationException("oh noes!")
         }
     }
 
-    // throws a ConstraintDefinitionException as `@MethodValidation` must not define args
-    data class WithIncorrectlyDefinedMethodValidation(@NotEmpty val id: String) {
-        @MethodValidation(fields = ["id"])
-        fun checkId(a: String): MethodValidationResult =
-            MethodValidationResult.validIfTrue({ a == id }, { "id not equal" })
+    // throws a ConstraintDefinitionException as `@PostConstructValidation` must not define args
+    data class WithIncorrectlyDefinedPostConstructValidation(@NotEmpty val id: String) {
+        @PostConstructValidation(fields = ["id"])
+        fun checkId(a: String): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue({ a == id }, { "id not equal" })
     }
 
-    // throws a ConstraintDefinitionException as `@MethodValidation` must return a MethodValidationResult
-    data class AnotherIncorrectlyDefinedMethodValidation(@NotEmpty val id: String) {
-        @MethodValidation(fields = ["id"])
+    // throws a ConstraintDefinitionException as `@PostConstructValidation` must return a PostConstructValidationResult
+    data class AnotherIncorrectlyDefinedPostConstructValidation(@NotEmpty val id: String) {
+        @PostConstructValidation(fields = ["id"])
         fun checkId(): Boolean = id.isNotEmpty()
     }
 
@@ -235,9 +238,9 @@ object testclasses {
         val name: String,
         @OneOf(value = ["F", "M", "Other"]) val gender: String
     ) {
-        @MethodValidation(fields = ["name"])
-        fun nameCheck(): MethodValidationResult =
-            MethodValidationResult.validIfTrue({ name.isNotEmpty() }, { "cannot be empty" })
+        @PostConstructValidation(fields = ["name"])
+        fun nameCheck(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue({ name.isNotEmpty() }, { "cannot be empty" })
     }
 
     // nested NotEmpty on a collection of a data class type
@@ -249,9 +252,9 @@ object testclasses {
         val city: String = "San Francisco"
         val state: String = "California"
 
-        @MethodValidation(fields = ["address"])
-        fun validateAddress(): MethodValidationResult =
-            MethodValidationResult.validIfTrue({ address.state.isNotEmpty() }, { "state must be specified" })
+        @PostConstructValidation(fields = ["address"])
+        fun validateAddress(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue({ address.state.isNotEmpty() }, { "state must be specified" })
     }
 
     data class WithPersonCheck(
@@ -305,9 +308,9 @@ object testclasses {
         @OneOf(value = ["F", "M", "Other"]) val gender: String,
         val job: String
     ) {
-        @MethodValidation(fields = ["job"], payload = [NestedUserPayload::class])
-        fun jobCheck(): MethodValidationResult =
-            MethodValidationResult.validIfTrue(
+        @PostConstructValidation(fields = ["job"], payload = [NestedUserPayload::class])
+        fun jobCheck(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue(
                 { job.isNotEmpty() },
                 { "cannot be empty" },
                 payload = NestedUserPayload(id, job)
@@ -467,9 +470,9 @@ object testclasses {
     interface AncestorWithValidation {
         @get:NotEmpty val field1: String
 
-        @MethodValidation(fields = ["field1"])
-        fun validateField1(): MethodValidationResult =
-            MethodValidationResult.validIfTrue({
+        @PostConstructValidation(fields = ["field1"])
+        fun validateField1(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue({
                 try {
                     field1.toDouble(); true
                 } catch (e: Exception) {
@@ -483,9 +486,9 @@ object testclasses {
     data class InvalidDoublePerson(@NotEmpty val name: String, @NotEmpty val otherName: () -> String)
     data class DoublePerson(@NotEmpty val name: String, @NotEmpty val otherName: () -> String)
     data class ValidDoublePerson(@NotEmpty val name: String, @NotEmpty val otherName: () -> String) {
-        @MethodValidation
-        fun checkOtherName(): MethodValidationResult =
-            MethodValidationResult.validIfTrue(
+        @PostConstructValidation
+        fun checkOtherName(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue(
                 { otherName().length >= 3 },
                 { "otherName must be longer than 3 chars" })
     }
@@ -517,7 +520,7 @@ object testclasses {
     )
 
     // executable annotation -- note the validator must specify a `@SupportedValidationTarget` of annotated element
-    data class CarWithPassengerCount @ValidPassengerCountReturnValue(max = 1) constructor(val passengers: List<Person>)
+    data class CarWithPassengerCount @ValidPassengerCountReturnValue(max = 1) constructor(val passengers: List<Person>) {}
 
     // class-level annotation
     @ValidPassengerCount(max = 4)
@@ -537,25 +540,25 @@ object testclasses {
         @Valid val passengers: List<Person>/* = emptyList()*/
     ) {
 
-        @MethodValidation
-        fun validateId(): MethodValidationResult =
-            MethodValidationResult.validIfTrue({ id.mod(2) == 1 }, { "id may not be even" })
+        @PostConstructValidation
+        fun validateId(): PostConstructValidationResult =
+            PostConstructValidationResult.validIfTrue({ id.mod(2) == 1 }, { "id may not be even" })
 
-        @MethodValidation
-        fun validateYearBeforeNow(): MethodValidationResult {
+        @PostConstructValidation
+        fun validateYearBeforeNow(): PostConstructValidationResult {
             val thisYear = LocalDate.now().year
             val yearMoreThanOneYearInFuture: Boolean =
                 if (year > thisYear) {
                     (year - thisYear) > 1
                 } else false
-            return MethodValidationResult.validIfFalse(
+            return PostConstructValidationResult.validIfFalse(
                 { yearMoreThanOneYearInFuture },
                 { "Model year can be at most one year newer." }
             )
         }
 
-        @MethodValidation(fields = ["ownershipEnd"])
-        fun ownershipTimesValid(): MethodValidationResult =
+        @PostConstructValidation(fields = ["ownershipEnd"])
+        fun ownershipTimesValid(): PostConstructValidationResult =
             validateTimeRange(
                 ownershipStart,
                 ownershipEnd,
@@ -563,8 +566,8 @@ object testclasses {
                 "ownershipEnd"
             )
 
-        @MethodValidation(fields = ["warrantyStart", "warrantyEnd"])
-        fun warrantyTimeValid(): MethodValidationResult =
+        @PostConstructValidation(fields = ["warrantyStart", "warrantyEnd"])
+        fun warrantyTimeValid(): PostConstructValidationResult =
             validateTimeRange(
                 warrantyStart,
                 warrantyEnd,
@@ -596,6 +599,11 @@ object testclasses {
         @NotEmpty val cars: List<@Valid SimpleCar>
     )
 
+    class TestClass {
+        @JvmField
+        val names: List<@Valid String> = emptyList()
+    }
+
     data class GenericTestDataClass<T>(@NotEmpty @Valid val data: T)
     data class GenericMinTestDataClass<T>(@Min(4) val data: T)
     data class GenericTestDataClassMultipleTypes<T, U, V>(
@@ -614,12 +622,12 @@ object testclasses {
         endTime: LocalDate?,
         startTimeProperty: String,
         endTimeProperty: String
-    ): MethodValidationResult {
+    ): PostConstructValidationResult {
         val rangeDefined = startTime != null && endTime != null
         val partialRange = !rangeDefined && (startTime != null || endTime != null)
 
         return if (rangeDefined) {
-            MethodValidationResult.validIfTrue(
+            PostConstructValidationResult.validIfTrue(
                 { startTime!!.isBefore(endTime) },
                 {
                     "%s <%s> must be after %s <%s>".format(
@@ -631,11 +639,11 @@ object testclasses {
                 }
             )
         } else if (partialRange) {
-            MethodValidationResult.Invalid(
+            PostConstructValidationResult.Invalid(
                 "both %s and %s are required for a valid range".format(startTimeProperty, endTimeProperty)
             )
         } else {
-            MethodValidationResult.Valid
+            PostConstructValidationResult.Valid
         }
     }
 
@@ -657,10 +665,5 @@ object testclasses {
 
     data class WithSecondaryConstructor(@Min(10) val one: Int, val two: Int) {
         constructor(three: String, @NotBlank four: String) : this(three.toInt(), four.toInt())
-    }
-
-    data class AlwaysFailMethodValidation(val id: String) {
-        @MethodValidation(fields = ["id"])
-        fun checkId(): MethodValidationResult = throw RuntimeException("FORCED TEST EXCEPTION")
     }
 }

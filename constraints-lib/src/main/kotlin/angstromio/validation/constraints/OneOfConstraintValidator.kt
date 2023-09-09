@@ -1,6 +1,5 @@
 package angstromio.validation.constraints
 
-import angstromio.validation.ConstraintValidatorContextBuilder
 import arrow.core.toNonEmptyListOrNull
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext

@@ -19,10 +19,23 @@ internal class ConstraintDescriptorFactory(private val validatorFactory: Validat
         annotation: Annotation,
         constrainedElementKind: ConstrainedElement.ConstrainedElementKind = ConstrainedElement.ConstrainedElementKind.FIELD
     ) = ConstraintDescriptorImpl(
-        validatorFactory.constraintHelper(),
+        validatorFactory.constraintHelper,
         mkConstrainable(name, clazz, declaringClazz, constrainedElementKind),
         ConstraintAnnotationDescriptor.Builder(annotation).build(),
-        ConstraintLocation.ConstraintLocationKind.FIELD,
+        ConstraintLocation.ConstraintLocationKind.of(constrainedElementKind),
+        Default::class.java,
+        ConstraintOrigin.DEFINED_LOCALLY,
+        ConstraintDescriptorImpl.ConstraintType.GENERIC
+    )
+
+    fun newConstraintDescriptor(
+        constrainable: Constrainable,
+        annotation: Annotation
+    ) = ConstraintDescriptorImpl(
+        validatorFactory.constraintHelper,
+        constrainable,
+        ConstraintAnnotationDescriptor.Builder(annotation).build(),
+        ConstraintLocation.ConstraintLocationKind.of(constrainable.constrainedElementKind),
         Default::class.java,
         ConstraintOrigin.DEFINED_LOCALLY,
         ConstraintDescriptorImpl.ConstraintType.GENERIC

@@ -3,13 +3,13 @@
 
 package angstromio.validation.extensions
 
-import angstromio.validation.internal.engine.ConstraintViolationFactory
+import angstromio.validation.internal.engine.ConstraintViolationHelper
 import jakarta.validation.ConstraintViolation
 import jakarta.validation.Payload
 import org.hibernate.validator.engine.HibernateConstraintViolation
 
 fun <T : Any> Collection<ConstraintViolation<T>>.sorted(): List<ConstraintViolation<T>> =
-    ConstraintViolationFactory.sorted(this.toSet())
+    ConstraintViolationHelper.sorted(this.toSet())
 
 inline fun <reified P : Payload> ConstraintViolation<*>.getDynamicPayload(clazz: Class<P>): P? {
     return try {

@@ -1,6 +1,5 @@
 package angstromio.validation.constraints
 
-import angstromio.validation.ConstraintValidatorContextBuilder
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.ValidationException
@@ -50,7 +49,8 @@ class ISO3166CountryCodeConstraintValidator : ConstraintValidator<CountryCode, A
         // an empty value is not a valid country code
         val valid = if (valueAsList.isEmpty()) false else invalidCountryCodes.isEmpty()
         if (!valid) {
-            ConstraintValidatorContextBuilder.addExpressionVariable("validatedValue", valueToString(valueAsList))
+            ConstraintValidatorContextBuilder
+                .addExpressionVariable("validatedValue", valueToString(valueAsList))
                 .withMessageTemplate(countryCode!!.message)
                 .addConstraintViolation(constraintValidatorContext)
         }

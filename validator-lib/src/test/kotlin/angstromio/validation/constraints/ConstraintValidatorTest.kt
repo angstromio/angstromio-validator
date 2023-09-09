@@ -3,7 +3,6 @@ package angstromio.validation.constraints
 import angstromio.validation.DataClassValidator
 import io.kotest.core.spec.style.FunSpec
 import jakarta.validation.ConstraintViolation
-import kotlin.reflect.KClass
 
 abstract class ConstraintValidatorTest : FunSpec() {
 
@@ -12,7 +11,7 @@ abstract class ConstraintValidatorTest : FunSpec() {
     abstract val testFieldName: String
 
     protected fun <A : Annotation, T : Any> validate(
-        clazz: KClass<T>,
+        clazz: Class<T>,
         paramName: String,
         value: Any?
     ): Set<ConstraintViolation<T>> = validator.validateValue(clazz, paramName, value)

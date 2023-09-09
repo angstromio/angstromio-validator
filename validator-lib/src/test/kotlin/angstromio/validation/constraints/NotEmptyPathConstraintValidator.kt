@@ -2,7 +2,7 @@
 
 package angstromio.validation.constraints
 
-import angstromio.validation.testclasses.TestPath
+import angstromio.validation.TestClasses.TestPath
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.constraints.NotEmpty

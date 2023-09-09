@@ -1,37 +1,38 @@
 package angstromio.validation
 
 import angstromio.util.control.NonFatal
+import angstromio.util.extensions.Annotations.eq
+import angstromio.util.extensions.Annotations.notEq
+import angstromio.util.extensions.Anys.isInstanceOf
 import angstromio.util.extensions.Nulls.mapNotNull
-import angstromio.util.extensions.find
-import angstromio.util.extensions.notEq
 import angstromio.validation.cfg.ConstraintMapping
-import angstromio.validation.engine.MethodValidationResult
-import angstromio.validation.executable.DataClassExecutableValidator
+import angstromio.validation.constraints.PostConstructValidation
+import angstromio.validation.engine.PostConstructValidationResult
+import angstromio.validation.internal.ConstraintValidatorFactoryHelper
 import angstromio.validation.internal.Types
 import angstromio.validation.internal.ValidationContext
 import angstromio.validation.internal.constraintvalidation.ConstraintValidatorContextFactory
-import angstromio.validation.internal.engine.ConstraintViolationFactory
+import angstromio.validation.internal.engine.ClassHelper
+import angstromio.validation.internal.engine.ConstraintViolationHelper
 import angstromio.validation.internal.metadata.descriptor.ConstraintDescriptorFactory
-import angstromio.validation.internal.metadata.descriptor.MethodValidationConstraintDescriptor
-import angstromio.validation.metadata.DataClassDescriptor
-import angstromio.validation.metadata.Descriptor
-import angstromio.validation.metadata.ExecutableDescriptor
-import angstromio.validation.metadata.PropertyDescriptor
 import arrow.core.memoize
-import jakarta.validation.Constraint
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext
 import jakarta.validation.ConstraintViolation
 import jakarta.validation.MessageInterpolator
-import jakarta.validation.Payload
 import jakarta.validation.UnexpectedTypeException
 import jakarta.validation.Validation
 import jakarta.validation.ValidationException
 import jakarta.validation.Validator
-import jakarta.validation.constraintvalidation.SupportedValidationTarget
-import jakarta.validation.constraintvalidation.ValidationTarget
+import jakarta.validation.executable.ExecutableValidator
 import jakarta.validation.groups.Default
+import jakarta.validation.metadata.BeanDescriptor
 import jakarta.validation.metadata.ConstraintDescriptor
+import jakarta.validation.metadata.ElementDescriptor
+import jakarta.validation.metadata.ExecutableDescriptor
+import jakarta.validation.metadata.MethodDescriptor
+import jakarta.validation.metadata.MethodType
+import jakarta.validation.metadata.PropertyDescriptor
 import jakarta.validation.spi.ValidationProvider
 import org.hibernate.validator.HibernateValidator
 import org.hibernate.validator.HibernateValidatorConfiguration
@@ -43,29 +44,26 @@ import org.hibernate.validator.internal.metadata.aggregated.CascadingMetaDataBui
 import org.hibernate.validator.internal.metadata.aggregated.ExecutableMetaData
 import org.hibernate.validator.internal.metadata.descriptor.ConstraintDescriptorImpl
 import org.hibernate.validator.internal.metadata.raw.ConfigurationSource
-import org.hibernate.validator.internal.metadata.raw.ConstrainedElement
 import org.hibernate.validator.internal.metadata.raw.ConstrainedExecutable
 import org.hibernate.validator.internal.metadata.raw.ConstrainedParameter
 import org.hibernate.validator.internal.properties.javabean.JavaBeanFactory
+import org.hibernate.validator.internal.util.ExecutableHelper
 import org.hibernate.validator.internal.util.annotation.AnnotationDescriptor
 import org.hibernate.validator.internal.util.annotation.AnnotationFactory
+import java.lang.reflect.Constructor
+import java.lang.reflect.Executable
 import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
 import java.util.*
 import kotlin.reflect.KCallable
-import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
-import kotlin.reflect.KParameter
-import kotlin.reflect.jvm.javaConstructor
-import kotlin.reflect.jvm.javaMethod
-import kotlin.reflect.jvm.jvmErasure
 
-typealias ConstraintValidatorType = ConstraintValidator<in Annotation, *>
-
+@Suppress("UNCHECKED_CAST")
 class DataClassValidator(
     private val cacheSize: Long,
     private val validatorFactory: ValidatorFactoryInspector,
     internal val underlying: Validator
-) : DataClassExecutableValidator {
+) : Validator, ExecutableValidator {
 
     companion object {
         /** The size of the caffeine cache that is used to store reflection data on a validated data class. */
@@ -114,7 +112,6 @@ class DataClassValidator(
                 constraintMappings = setOf(constraintMapping)
             )
 
-        @Suppress("UNCHECKED_CAST")
         fun validator(): DataClassValidator {
             val configuration: HibernateValidatorConfiguration =
                 Validation
@@ -129,9 +126,9 @@ class DataClassValidator(
                 val hibernateConstraintMapping: org.hibernate.validator.cfg.ConstraintMapping =
                     configuration.createConstraintMapping()
                 hibernateConstraintMapping
-                    .constraintDefinition(constraintMapping.annotationClazz.java as Class<Annotation>)
+                    .constraintDefinition(constraintMapping.annotationClazz as Class<Annotation>)
                     .includeExistingValidators(constraintMapping.includeExistingValidators)
-                    .validatedBy(constraintMapping.constraintValidator.java as Class<ConstraintValidator<Annotation, *>>)
+                    .validatedBy(constraintMapping.constraintValidator as Class<ConstraintValidator<Annotation, *>>)
                 configuration.addMapping(hibernateConstraintMapping)
             }
 
@@ -144,37 +141,194 @@ class DataClassValidator(
         }
     }
 
-    internal val descriptorFactory: DescriptorFactory =
-        DescriptorFactory(cacheSize, validatorFactory.constraintHelper())
-
-    private val constraintViolationFactory: ConstraintViolationFactory = ConstraintViolationFactory(validatorFactory)
+    private val constraintViolationHelper: ConstraintViolationHelper = ConstraintViolationHelper(validatorFactory)
 
     private val constraintDescriptorFactory: ConstraintDescriptorFactory = ConstraintDescriptorFactory(validatorFactory)
+
+    internal val descriptorFactory: DescriptorFactory =
+        DescriptorFactory(cacheSize, validatorFactory, constraintDescriptorFactory)
 
     private val constraintValidatorContextFactory: ConstraintValidatorContextFactory =
         ConstraintValidatorContextFactory(validatorFactory)
 
     private val constraintValidatorManager: ConstraintValidatorManager =
-        validatorFactory.getConstraintCreationContext().constraintValidatorManager
+        validatorFactory.constraintCreationContext.constraintValidatorManager
 
     fun close() {
+        descriptorFactory.close()
         validatorFactory.close()
     }
 
-    /**
-     * Returns a [DataClassDescriptor] object describing the given data class type constraints.
-     * Descriptors describe constraints on a given class and any cascaded data class types.
-     *
-     * The returned object (and associated objects including DataClassDescriptor) are immutable.
-     *
-     * @param clazz class or interface type evaluated
-     * @param T the clazz type
-     *
-     * @return the [DataClassDescriptor] for the specified class
-     *
-     * @see [DataClassDescriptor]
-     */
-    fun <T : Any> getConstraintsForClass(clazz: KClass<T>): DataClassDescriptor<T> = descriptorFactory.describe(clazz)
+    // BEGIN: jakarta.validationValidator methods ----------------------------------------------------------------------
+
+    /** @inheritDoc */
+    override fun getConstraintsForClass(clazz: Class<*>): BeanDescriptor = descriptorFactory.describe(clazz)
+
+    /** @inheritDoc */
+    override fun <T : Any> validate(
+        obj: T,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> =
+        validateDescriptor(
+            descriptor = null,
+            context = ValidationContext(null, null, null, null, PathImpl.createRootPath()),
+            value = obj,
+            groups = groups.toList()
+        )
+
+    /** @inheritDoc */
+    override fun <T : Any> validateValue(
+        beanType: Class<T>,
+        propertyName: String,
+        value: Any?,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
+        return validateValue(getConstraintsForClass(beanType), propertyName, value, *groups)
+    }
+
+    /** @inheritDoc */
+    override fun <T : Any> validateProperty(
+        obj: T,
+        propertyName: String,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
+
+        val descriptor = getConstraintsForClass(obj::class.java)
+        return when (descriptor.constrainedProperties.find { it.propertyName == propertyName }) {
+            null -> throw IllegalArgumentException("$propertyName is not a field of ${descriptor.elementClass}.")
+            else -> validateDescriptor(
+                descriptor = descriptor,
+                context = ValidationContext(
+                    propertyName, obj.javaClass, obj, obj, PathImpl.createRootPath()
+                ),
+                value = obj,
+                groups = groups.toList()
+            )
+        }
+    }
+
+    /** @inheritDoc */
+    @Throws(ValidationException::class)
+    override fun <U> unwrap(clazz: Class<U>): U {
+        return if (clazz.isAssignableFrom(DataClassValidator::class.java)) {
+            this as U
+        } else {
+            throw ValidationException("Type ${clazz.name} not supported for unwrapping.")
+        }
+    }
+
+    /** @inheritDoc */
+    override fun forExecutables(): ExecutableValidator = this
+
+    // END: jakarta.validation.Validator methods -----------------------------------------------------------------------
+
+    // BEGIN jakarta.validation.executable.ExecutableValidator Methods -------------------------------------------------
+
+    /** @inheritDoc */
+    override fun <T : Any> validateParameters(
+        obj: T,
+        method: Method,
+        parameterValues: Array<Any?>,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        val descriptor = getConstraintsForClass(obj::class.java)
+        return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
+            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
+            else -> {
+                validateParameters(
+                    obj = obj,
+                    executable = method,
+                    executableDescriptor = methodDescriptor,
+                    parameterValues = parameterValues,
+                    groups = groups.toList()
+                )
+            }
+        }
+    }
+
+    /** @inheritDoc */
+    override fun <T : Any> validateReturnValue(
+        obj: T,
+        method: Method,
+        returnValue: Any?,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        val descriptor = getConstraintsForClass(obj::class.java)
+        return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
+            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
+            else -> {
+                val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
+                methodPath.addReturnValueNode()
+
+                validateReturnValue(
+                    context = ValidationContext(
+                        fieldName = methodDescriptor.name,
+                        rootClazz = obj::class.java as Class<T>,
+                        root = obj,
+                        leaf = obj,
+                        path = methodPath
+                    ),
+                    executableDescriptor = methodDescriptor,
+                    value = returnValue,
+                    groups = groups.toList()
+                )
+            }
+        }
+    }
+
+    /** @inheritDoc */
+    override fun <T : Any> validateConstructorParameters(
+        constructor: Constructor<out T>,
+        parameterValues: Array<Any?>,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        val constructorDescriptor = descriptorFactory.describeConstructor(constructor)
+            ?: throw IllegalArgumentException("Cannot find constrained constructor descriptor for Constructor ${constructor.name}(${constructor.parameterTypes.joinToString()})")
+        return validateParameters(
+            obj = null,
+            executable = constructor,
+            executableDescriptor = constructorDescriptor,
+            parameterValues = parameterValues,
+            groups = groups.toList()
+        )
+    }
+
+    /** @inheritDoc */
+    override fun <T : Any> validateConstructorReturnValue(
+        constructor: Constructor<out T>,
+        createdObject: T,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        // Note: we could do descriptorFactory#describeConstructor here, but we want to ensure that the passed constructor
+        // is an actual constrained constructor of the given 'createdObject' instance.
+        val descriptor = getConstraintsForClass(createdObject::class.java)
+        return when (val constructorDescriptor = descriptor.getConstraintsForConstructor(*constructor.parameterTypes)) {
+            null -> emptySet() // not a constrained constructor
+            else -> {
+                val constructorPath = PathImpl.createPathForExecutable(getExecutableMetaData(constructor))
+                constructorPath.addReturnValueNode()
+
+                validateReturnValue(
+                    context = ValidationContext(
+                        fieldName = constructorDescriptor.name,
+                        rootClazz = createdObject::class.java as Class<T>,
+                        root = createdObject,
+                        leaf = createdObject,
+                        path = constructorPath
+                    ),
+                    executableDescriptor = constructorDescriptor,
+                    value = createdObject,
+                    groups = groups.toList()
+                )
+            }
+        }
+    }
+
+    // END: jakarta.validation.executable.ExecutableValidator methods --------------------------------------------------
+
+    // BEGIN: angstromio.validation.DataClassValidator methods ---------------------------------------------------------
 
     /**
      * Returns a [ExecutableDescriptor] object describing a given [KCallable].
@@ -188,24 +342,24 @@ class DataClassValidator(
      * @note the returned [ExecutableDescriptor] is NOT cached. It is up to the caller of this
      *       method to optimize any calls to this method.
      */
-    fun <R : Any> describeExecutable(
-        executable: KFunction<R>, mixinClazz: KClass<*>?
-    ): ExecutableDescriptor<R>? =
-        descriptorFactory.describe(executable, mixinClazz)
+    fun describeExecutable(
+        executable: Executable,
+        mixinClazz: Class<*>?
+    ): ExecutableDescriptor? = descriptorFactory.describe(executable, mixinClazz)
 
     /**
-     * Returns a list of [ExecutableDescriptor] instances describing the `@MethodValidation`-annotated
+     * Returns a list of [ExecutableDescriptor] instances describing the `@PostConstructValidation`-annotated
      * or otherwise constrained methods of the given data class type.
      *
      * @param clazz class or interface type evaluated
      *
-     * @return a list of [ExecutableDescriptor] for `@MethodValidation`-annotated or otherwise
+     * @return a list of [ExecutableDescriptor] for `@PostConstructValidation`-annotated or otherwise
      *         constrained methods of the class
      *
      * @note the returned [ExecutableDescriptor] instances are NOT cached. It is up to the caller of this
      *       method to optimize any calls to this method.
      */
-    fun describeMethods(clazz: KClass<*>): List<ExecutableDescriptor<Any>> = descriptorFactory.describeMethods(clazz)
+    fun describeMethods(clazz: Class<*>): List<MethodDescriptor> = descriptorFactory.describeMethods(clazz)
 
     /**
      * Returns the set of Constraints which validate the given [Annotation] class.
@@ -217,20 +371,11 @@ class DataClassValidator(
      * @note this method is memoized as it should only ever need to be calculated once for a given [Class].
      */
     val findConstraintValidators = ::findConstraintValidatorsFn.memoize()
-    private fun findConstraintValidatorsFn(annotationClazz: (KClass<out Annotation>)): Set<ConstraintValidator<*, *>> {
-        // compute from constraint, otherwise compute from registry
-        val validatedBy = if (annotationClazz.java.isAnnotationPresent(Constraint::class.java)) {
-            val constraintAnnotation = annotationClazz.java.getAnnotation(Constraint::class.java)
-            constraintAnnotation.validatedBy.map { clazz ->
-                validatorFactory.constraintValidatorFactory().getInstance(clazz.java) ?: throw ValidationException(
-                    "Constraint factory returned null when trying to create instance of $clazz."
-                )
-            }.toSet()
-        } else emptySet()
-        return validatedBy.ifEmpty {
-            validatorFactory.constraintHelper().getAllValidatorDescriptors(annotationClazz.java)
-                .map { it.newInstance(validatorFactory.constraintValidatorFactory()) }.toSet()
-        }
+    private fun findConstraintValidatorsFn(annotationClazz: (Class<out Annotation>)): Set<ConstraintValidator<*, *>> {
+        return ConstraintValidatorFactoryHelper.findConstraintValidators(
+            validatorFactory = validatorFactory,
+            annotationClazz = annotationClazz
+        )
     }
 
     /**
@@ -246,7 +391,8 @@ class DataClassValidator(
      *
      * @return true if the constraint fulfills the above conditions, false otherwise.
      */
-    fun isConstraintAnnotation(annotation: Annotation): Boolean = isConstraintAnnotation(annotation.annotationClass)
+    fun isConstraintAnnotation(annotation: Annotation): Boolean =
+        isConstraintAnnotation(annotation.annotationClass.java)
 
     /**
      * Checks whether the specified [[Annotation]] clazz is a valid constraint. A constraint has to fulfill the
@@ -261,8 +407,8 @@ class DataClassValidator(
      * @note this method is memoized as it should only ever need to be calculated once for a given [[Class]].
      */
     val isConstraintAnnotation = ::isConstraintAnnotationClazz.memoize()
-    private fun isConstraintAnnotationClazz(clazz: KClass<out Annotation>): Boolean =
-        validatorFactory.constraintHelper().isConstraintAnnotation(clazz.java)
+    private fun isConstraintAnnotationClazz(clazz: Class<out Annotation>): Boolean =
+        validatorFactory.constraintHelper.isConstraintAnnotation(clazz)
 
     /**
      * Validates all constraint constraints on an object.
@@ -274,65 +420,18 @@ class DataClassValidator(
      */
     @Throws(ValidationException::class)
     fun verify(
-        obj: Any, vararg groups: KClass<*>
+        obj: Any,
+        vararg groups: Class<*>
     ) {
         val invalidResult = validate(obj, *groups)
-        if (invalidResult.isNotEmpty()) throw constraintViolationFactory.newConstraintViolationException(invalidResult)
+        if (invalidResult.isNotEmpty()) throw constraintViolationHelper.newConstraintViolationException(invalidResult)
     }
-
-    /**
-     * Validates all constraint constraints on an object.
-     *
-     * @param obj    the object to validate.
-     * @param groups the list of groups targeted for validation (defaults to Default).
-     * @param T the type of the object to validate.
-     *
-     * @return constraint violations or an empty set if none
-     *
-     * @throws IllegalArgumentException - if object is null.
-     */
-    fun <T : Any> validate(
-        obj: T, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val context = ValidationContext<T>(null, null, null, null, PathImpl.createRootPath())
-        return validate(maybeDescriptor = null, context = context, value = obj, groups = groups.map { it.java })
-    }
-
-    /**
-     * Validates all constraint constraints on the `fieldName` field of the given class `beanType`
-     * if the `fieldName` field value were `value`.
-     *
-     * ConstraintViolation objects return `null` for ConstraintViolation.getRootBean() and
-     * ConstraintViolation.getLeafBean().
-     *
-     * ==Usage==
-     * Validate value of "" for the "id" field in data class `MyDataClass` (enabling group "Checks"):
-     *
-     *      data class MyDataClass(@NotEmpty(groups = Checks::class) id)
-     *      validator.validateFieldValue(MyDataClass::class, "id", "", List(Checks::class))
-     *
-     *
-     * @param beanType     the data class type.
-     * @param propertyName field to validate.
-     * @param value        field value to validate.
-     * @param groups       the list of groups targeted for validation (defaults to Default).
-     * @param T the type of the object to validate
-     *
-     * @return constraint violations or an empty set if none
-     *
-     * @throws IllegalArgumentException - if beanType is null, if fieldName is null, empty or not a valid object property.
-     */
-    fun <T : Any> validateValue(
-        beanType: KClass<T>, propertyName: String, value: Any?, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> = validateValue(
-        getConstraintsForClass(beanType), propertyName, value, *groups
-    )
 
     /**
      * Validates all constraint constraints on the `fieldName` field of the class described
-     * by the given [DataClassDescriptor] if the `fieldName` field value were `value`.
+     * by the given [BeanDescriptor] if the `fieldName` field value were `value`.
      *
-     * @param descriptor   the [DataClassDescriptor] of the described class.
+     * @param descriptor   the [BeanDescriptor] of the described class.
      * @param propertyName field to validate.
      * @param value        field value to validate.
      * @param groups       the list of groups targeted for validation (defaults to Default).
@@ -343,218 +442,33 @@ class DataClassValidator(
      * @throws IllegalArgumentException - if fieldName is null, empty or not a valid object property.
      */
     fun <T : Any> validateValue(
-        descriptor: DataClassDescriptor<T>, propertyName: String, value: Any?, vararg groups: KClass<*>
+        descriptor: BeanDescriptor,
+        propertyName: String,
+        value: Any?,
+        vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
-        if (propertyName.isEmpty()) throw IllegalArgumentException("fieldName must not be empty.")
+        if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
 
-        return when (val propertyDescriptor = descriptor.members[propertyName]) {
-            null -> throw IllegalArgumentException("$propertyName is not a field of ${descriptor.clazz}.")
-            else -> {
-                validate(maybeDescriptor = propertyDescriptor, context = ValidationContext(
-                    propertyName, descriptor.clazz.java, null, null, PathImpl.createRootPath()
-                ), value = value, groups = groups.map { it.java })
-            }
-        }
-    }
-
-    /**
-     * Validates all constraint constraints on the `fieldName` field of the given object.
-     *
-     * ==Usage==
-     * Validate the "id" field in data class `MyClass` (enabling the validation group "Checks"):
-     *
-     *      data class MyClass(@NotEmpty(groups = Checks::class) id)
-     *      val i = MyClass("")
-     *      validator.validateProperty(i, "id", listOf(Checks::class))
-     *
-     *
-     * @param obj          object to validate.
-     * @param propertyName property to validate (used in error reporting).
-     * @param groups       the list of groups targeted for validation (defaults to Default).
-     * @param T the type of the object to validate.
-     *
-     * @return constraint violations or an empty set if none.
-     *
-     * @throws IllegalArgumentException - if object is null, if fieldName is null, empty or not a valid object property.
-     */
-    fun <T : Any> validateProperty(
-        obj: T, propertyName: String, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        if (propertyName.isEmpty()) throw IllegalArgumentException("fieldName must not be empty.")
-
-        val dataClassDescriptor = getConstraintsForClass(obj::class)
-        return when (dataClassDescriptor.members[propertyName]) {
-            null -> throw IllegalArgumentException("$propertyName is not a field of ${dataClassDescriptor.clazz}.")
-            else -> validate(maybeDescriptor = dataClassDescriptor, context = ValidationContext(
-                propertyName, obj.javaClass, obj, obj, PathImpl.createRootPath()
-            ), value = obj, groups = groups.map { it.java })
-        }
-    }
-
-    /**
-     * Returns an instance of the specified type allowing access to provider-specific APIs.
-     *
-     * If the Jakarta Bean Validation provider implementation does not support the specified class, ValidationException is thrown.
-     *
-     * @param clazz the class of the object to be returned
-     * @param U the type of the object to be returned
-     *
-     * @return an instance of the specified class
-     *
-     * @throws ValidationException - if the provider does not support the call.
-     */
-    @Throws(ValidationException::class)
-    @Suppress("UNCHECKED_CAST")
-    fun <U> unwrap(clazz: Class<U>): U {
-        // If this were an implementation that implemented the specification
-        // interface, this is where users would be able to cast the validator from the
-        // interface type into our specific implementation type in order to call methods
-        // only available on the implementation. However, since the specification uses Java
-        // collection types we do not directly implement and instead expose our feature-compatible
-        // DataClassValidator directly. We try to remain true to the spirit of the specification
-        // interface and thus implement unwrap but only to return this implementation.
-        return if (clazz.isAssignableFrom(DataClassValidator::class.java)) {
-            this as U
-        } else if (clazz.isAssignableFrom(DataClassExecutableValidator::class.java)) {
-            this as U
-        } else {
-            throw ValidationException("Type ${clazz.name} not supported for unwrapping.")
-        }
-    }
-
-    // Executable Validator Methods ------------------------------------------------------------------------------------
-
-    /** Returns the contract for validating parameters and return values of methods and constructors. */
-    fun forExecutables(): DataClassExecutableValidator = this
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> validateMethods(
-        obj: T, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val dataClassDescriptor = getConstraintsForClass(obj::class)
-        return validateMethods(rootClazz = obj::class.java as Class<T>,
-            root = obj,
-            methods = dataClassDescriptor.methods,
-            obj = obj,
-            groups = groups.map { it.java })
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> validateMethod(
-        obj: T, method: KFunction<*>, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val dataClassDescriptor = getConstraintsForClass(obj::class)
-        return when (val methodDescriptor = dataClassDescriptor.methods.find { it.callable.name == method.name }) {
-            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${dataClassDescriptor.clazz}.")
-            else -> {
-                validateMethods(rootClazz = obj::class.java as Class<T>,
-                    root = obj,
-                    methods = listOf(methodDescriptor),
-                    obj = obj,
-                    groups = groups.map { it.java })
-            }
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> validateParameters(
-        obj: T, method: KFunction<*>, parameterValues: List<Any?>, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val dataClassDescriptor = getConstraintsForClass(obj::class)
-        return when (val methodDescriptor = dataClassDescriptor.methods.find { it.callable.name == method.name }) {
-            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${dataClassDescriptor.clazz}.")
-            else -> {
-                validateExecutableParameters(
-                    executableDescriptor = methodDescriptor as ExecutableDescriptor<T>,
-                    root = obj,
-                    leaf = obj,
-                    parameterValues = parameterValues,
-                    parameterNames = null,
-                    groups = groups.map { it.java })
-            }
-        }
-    }
-
-    override fun <T : Any> validateReturnValue(
-        obj: T, method: KFunction<*>, returnValue: Any, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> = underlying.forExecutables().validateReturnValue(
-        obj, method.javaMethod, returnValue, *groups.map { it.java }.toTypedArray()
-    )
-
-    override fun <T : Any> validateConstructorParameters(
-        constructor: KFunction<T>, parameterValues: List<Any?>, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val parameterCount = constructor.parameters.filter { it.kind == KParameter.Kind.VALUE }.size
-        val parameterValuesLength = parameterValues.size
-        if (parameterCount != parameterValuesLength) throw ValidationException(
-            "Wrong number of parameters. Method or constructor $constructor expects $parameterCount parameters, but got $parameterValuesLength."
-        )
-
-        return validateExecutableParameters(
-            executableDescriptor = descriptorFactory.describeConstructor(constructor),
-            root = null,
-            leaf = null,
-            parameterValues = parameterValues,
-            parameterNames = null,
-            groups = groups.map { it.java })
-    }
-
-    override fun <R : Any> validateMethodParameters(
-        method: KFunction<R>, parameterValues: List<Any?>, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<R>> {
-        val parameterCount = method.parameters.filter { it.kind == KParameter.Kind.VALUE }.size
-        val parameterValuesLength = parameterValues.size
-        if (parameterCount != parameterValuesLength) throw ValidationException(
-            "Wrong number of parameters. Method or constructor $method expects $parameterCount parameters, but got $parameterValuesLength."
-        )
-        return when (val descriptor = descriptorFactory.describeMethod(method)) {
+        return when (val propertyDescriptor =
+            descriptor.constrainedProperties.find { it.propertyName == propertyName }) {
             null -> emptySet()
-            else ->
-                validateExecutableParameters(
-                    executableDescriptor = descriptor,
-                    root = null,
-                    leaf = null,
-                    parameterValues = parameterValues,
-                    parameterNames = null,
-                    groups = groups.map { it.java })
+            else -> {
+                validateDescriptor(
+                    descriptor = propertyDescriptor,
+                    context = ValidationContext(
+                        fieldName = propertyName,
+                        rootClazz = descriptor.elementClass as Class<T>,
+                        root = null,
+                        leaf = null,
+                        path = PathImpl.createRootPath()
+                    ),
+                    value = value,
+                    groups = groups.toList()
+                )
+            }
         }
+
     }
-
-    override fun <T : Any> validateConstructorReturnValue(
-        constructor: KFunction<T>, createdObject: T, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> = underlying.forExecutables().validateConstructorReturnValue(
-        constructor.javaConstructor, createdObject, *groups.map { it.java }.toTypedArray()
-    )
-
-    override fun <T : Any> validateExecutableParameters(
-        executable: ExecutableDescriptor<T>,
-        parameterValues: List<Any?>,
-        parameterNames: List<String>,
-        vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> {
-        val parameterCount = executable.callable.parameters.filter { it.kind == KParameter.Kind.VALUE }.size
-        val parameterValuesLength = parameterValues.size
-        if (parameterCount != parameterValuesLength) throw ValidationException(
-            "Wrong number of parameters. Method or constructor $executable expects $parameterCount parameters, but got $parameterValuesLength."
-        )
-        return validateExecutableParameters(
-            executableDescriptor = executable,
-            root = null,
-            leaf = null,
-            parameterValues = parameterValues,
-            parameterNames = parameterNames,
-            groups = groups.map { it.java }
-        )
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> validateMethods(
-        methods: List<ExecutableDescriptor<Any>>, obj: T, vararg groups: KClass<*>
-    ): Set<ConstraintViolation<T>> = validateMethods(rootClazz = obj::class.java as Class<T>,
-        root = obj,
-        methods = methods,
-        obj = obj,
-        groups = groups.map { it.java })
 
     /**
      * Evaluates all known [ConstraintValidator] instances supporting the constraints represented by the
@@ -578,22 +492,144 @@ class DataClassValidator(
      * @throws IllegalArgumentException - if fieldName is null, empty or not a valid object property.
      */
     fun validateFieldValue(
-        constraints: Map<KClass<out Annotation>, Map<String, Any>>,
+        constraints: Map<Class<out Annotation>, Map<String, Any>>,
         fieldName: String,
         value: Any,
-        vararg groups: KClass<*>
+        vararg groups: Class<*>
     ): Set<ConstraintViolation<Any>> {
         if (fieldName.isEmpty()) throw IllegalArgumentException("fieldName must not be empty.")
         val annotations = constraints.map { (constraintAnnotationType, attributes) ->
-            AnnotationFactory.create(AnnotationDescriptor.Builder(constraintAnnotationType.java, attributes).build())
+            AnnotationFactory.create(AnnotationDescriptor.Builder(constraintAnnotationType, attributes).build())
         }
-        return validateFieldValue(fieldName, annotations, value, groups.map { it.java })
+        return validateFieldValue(fieldName, annotations, value, groups.toList())
     }
 
-    // Private functions -----------------------------------------------------------------------------------------------
+    fun <T : Any> validatePostConstructValidationMethods(
+        obj: T,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        val descriptor = getConstraintsForClass(obj::class.java)
+        val methods = obj::class.java.declaredMethods
+        val results = mutableSetOf<ConstraintViolation<T>>()
+        methods.forEach { method ->
+            val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)
+            if (isPostConstructValidationConstrainedMethod(methodDescriptor, obj)) {
+                val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
+                methodPath.addReturnValueNode()
 
-    /** Validate the given fieldName with the given constraint constraints, value, and groups. */
-    @Suppress("UNCHECKED_CAST")
+                results.addAll(
+                    executePostConstructValidations(
+                        context = ValidationContext(
+                            fieldName = methodDescriptor.name,
+                            rootClazz = obj::class.java,
+                            root = obj,
+                            leaf = obj,
+                            path = methodPath
+                        ),
+                        method = method,
+                        methodDescriptor = methodDescriptor,
+                        clazzInstance = obj,
+                        groups = groups.toList()
+                    )
+                )
+            }
+        }
+        return results.toSet()
+    }
+
+    fun <T : Any> validatePostConstructValidationMethod(
+        obj: T,
+        method: Method,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<T>> {
+        // Note: we could do descriptorFactory#describeMethod here, but we want to ensure the PostConstructValidation
+        // is an actual method on the given obj instance.
+        val descriptor = getConstraintsForClass(obj::class.java)
+        return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
+            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
+            else -> {
+                val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
+                methodPath.addReturnValueNode()
+                executePostConstructValidations(
+                    context = ValidationContext(
+                        fieldName = method.name,
+                        rootClazz = obj::class.java,
+                        root = obj,
+                        leaf = obj,
+                        path = methodPath
+                    ),
+                    method = method,
+                    methodDescriptor = methodDescriptor,
+                    clazzInstance = obj,
+                    groups = groups.toList()
+                )
+            }
+        }
+    }
+
+
+    // BEGIN: Private functions ----------------------------------------------------------------------------------------
+
+    /* PRIVATE */
+
+    // BEGIN: Recursive validation methods -----------------------------------------------------------------------------
+
+    private fun <T : Any> validateField(
+        context: ValidationContext<T>,
+        propertyDescriptor: PropertyDescriptor?,
+        fieldValue: Any?,
+        groups: List<Class<*>>,
+    ): Set<ConstraintViolation<T>> {
+        return if (propertyDescriptor != null) {
+            val results = mutableListOf<ConstraintViolation<T>>()
+
+            val constraintDescriptors = propertyDescriptor.constraintDescriptors
+            val iterator = constraintDescriptors.iterator()
+            while (iterator.hasNext()) {
+                val constraintDescriptor = iterator.next()
+
+                results.addAll(
+                    isValid(
+                        context = context,
+                        constraintDescriptor = constraintDescriptor as ConstraintDescriptorImpl<Annotation>,
+                        clazz = propertyDescriptor.elementClass as Class<T>,
+                        value = fieldValue,
+                        groups = groups
+                    )
+                )
+            }
+
+            // Cannot cascade a null value
+            if (fieldValue != null) {
+                if (propertyDescriptor.isCascaded) {
+                    results.addAll(
+                        if (propertyDescriptor.constrainedContainerElementTypes.isNotEmpty()) {
+                            // need to cascade the constrained container element type, multi type containers are not supported
+                            // thus we only read the first constrained container element type
+                            validateCascadedProperty(
+                                context = context,
+                                isCollection = true,
+                                clazz = propertyDescriptor.constrainedContainerElementTypes.first().elementClass,
+                                clazzInstance = fieldValue,
+                                groups = groups
+                            )
+                        } else {
+                            validateCascadedProperty(
+                                context = context,
+                                isCollection = false,
+                                clazz = propertyDescriptor.elementClass,
+                                clazzInstance = fieldValue,
+                                groups = groups
+                            )
+                        }
+                    )
+                }
+            }
+
+            results.toSet()
+        } else emptySet()
+    }
+
     private fun validateFieldValue(
         fieldName: String, constraints: List<Annotation>, value: Any, groups: List<Class<*>>
     ): Set<ConstraintViolation<Any>> = if (constraints.isNotEmpty()) {
@@ -617,125 +653,64 @@ class DataClassValidator(
         results.toSet()
     } else emptySet()
 
-    private fun <T : Any> validateExecutableParameters(
-        executable: ExecutableDescriptor<T>,
-        parameterValues: List<Any>,
-        parameterNames: List<String>,
-        vararg groups: Class<*>
-    ): Set<ConstraintViolation<T>> {
-        val parameterCount = executable.callable.parameters.size
-        val parameterValuesLength = parameterValues.size
-        if (parameterCount != parameterValuesLength) throw ValidationException(
-            "Wrong number of parameters. Method or constructor $executable expects $parameterCount parameters, but got $parameterValuesLength."
-        )
-
-        return validateExecutableParameters(
-            executableDescriptor = executable,
-            root = null,
-            leaf = null,
-            parameterValues = parameterValues,
-            parameterNames = parameterNames,
-            groups = groups.toList()
-        )
-    }
-
-    // BEGIN: Recursive validation methods -----------------------------------------------------------
-
-    @Suppress("UNCHECKED_CAST")
-    private fun <T : Any> validateField(
-        context: ValidationContext<T>,
-        propertyDescriptor: PropertyDescriptor?,
-        fieldValue: Any?,
-        groups: List<Class<*>>,
-    ): Set<ConstraintViolation<T>> {
-        val constraints: List<Annotation> = propertyDescriptor?.annotations ?: emptyList()
-        val results = mutableListOf<ConstraintViolation<T>>()
-        var index = 0
-        val length = constraints.size
-        while (index < length) {
-            val constraint = constraints[index]
-            results.addAll(
-                isValid(
-                    context,
-                    constraint = constraint,
-                    clazz = propertyDescriptor?.clazz?.java as Class<T>,
-                    value = fieldValue,
-                    groups = groups
-                )
-            )
-            index += 1
-        }
-
-        // Cannot cascade a null or None value
-        if (fieldValue != null) {
-            if (propertyDescriptor?.isCascaded != null && propertyDescriptor.isCascaded) {
-                results.addAll(
-                    validateCascadedProperty(context, propertyDescriptor, fieldValue, groups)
-                )
-            }
-        }
-
-        return if (results.isEmpty()) emptySet()
-        else results.toSet()
-    }
-
-    private fun <T : Any> isValid(
-        context: ValidationContext<T>, constraint: Annotation, clazz: Class<T>, value: Any?, groups: List<Class<*>>
-    ): Set<ConstraintViolation<T>> =
-        isValid(context, constraint, clazz, value, null, null, groups)
-
-    @Suppress("UNCHECKED_CAST")
     private fun <T : Any> isValid(
         context: ValidationContext<T>,
         constraint: Annotation,
         clazz: Class<out T>,
         value: Any?,
-        constraintDescriptorOption: ConstraintDescriptorImpl<Annotation>?,
-        validatorOption: ConstraintValidator<Annotation, Any>?,
         groups: List<Class<*>>
-    ): Set<ConstraintViolation<T>> {
-        val constraintDescriptor = when (constraintDescriptorOption) {
-            null ->
-                constraintDescriptorFactory.newConstraintDescriptor(
+    ): Set<ConstraintViolation<T>> =
+        isValid(
+            context = context,
+            constraintDescriptor = constraintDescriptorFactory
+                .newConstraintDescriptor(
                     name = context.fieldName,
                     clazz = clazz,
                     declaringClazz = context.rootClazz ?: clazz,
                     annotation = constraint
+                ),
+            clazz = clazz,
+            value = value,
+            groups = groups
+        )
+
+    private fun <T : Any> isValid(
+        context: ValidationContext<T>,
+        constraintDescriptor: ConstraintDescriptorImpl<Annotation>,
+        clazz: Class<*>,
+        value: Any?,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> {
+        return if (isValidationEnabled(value, constraintDescriptor, groups)) {
+            val constraintValidator: ConstraintValidator<Annotation, Any>? =
+                ConstraintValidatorFactoryHelper.findInitializedConstraintValidator(
+                    validatorFactory = validatorFactory,
+                    constraintValidatorManager = constraintValidatorManager,
+                    constraintDescriptor = constraintDescriptor,
+                    clazz = clazz,
+                    value = value
                 )
-
-            else -> constraintDescriptorOption
-        }
-
-        return if (!ignorable(value, constraint) && groupsEnabled(constraintDescriptor, groups)) {
-            val constraintValidator: ConstraintValidator<Annotation, Any>? = when (validatorOption) {
-                null -> constraintValidatorManager.getInitializedValidator(
-                    Types.refineAsJavaType(clazz, value),
-                    constraintDescriptor,
-                    validatorFactory.constraintValidatorFactory(),
-                    validatorFactory.validatorFactoryScopedContext().constraintValidatorInitializationContext
-                )?.let { it as ConstraintValidator<Annotation, Any> }
-
-                else -> validatorOption // should already be initialized
-            }
-
             when (constraintValidator) {
                 null -> {
                     val configuration = context.path.toString().ifEmpty { clazz.simpleName }
                     throw UnexpectedTypeException(
-                        "No validator could be found for constraint '${constraint.annotationClass}' " + "validating type '${clazz.name}'. " + "Check configuration for '$configuration'"
+                        "No validator could be found for constraint '${constraintDescriptor.annotation.annotationClass}'" +
+                                " validating type '${clazz.name}'. " + "Check configuration for '$configuration'"
                     )
                 }
 
                 else -> {
                     // create validator context
                     val constraintValidatorContext: ConstraintValidatorContext =
-                        constraintValidatorContextFactory.newConstraintValidatorContext(
-                            context.path, constraintDescriptor
-                        )
+                        constraintValidatorContextFactory
+                            .newConstraintValidatorContext(
+                                path = context.path,
+                                constraintDescriptor = constraintDescriptor
+                            )
                     // compute if valid
                     if (constraintValidator.isValid(value, constraintValidatorContext)) emptySet()
                     else {
-                        constraintViolationFactory.buildConstraintViolations(
+                        constraintViolationHelper.buildConstraintViolations(
                             rootClazz = context.rootClazz,
                             root = context.root,
                             leaf = context.leaf,
@@ -747,122 +722,104 @@ class DataClassValidator(
                     }
                 }
             }
-        } else {
-            emptySet()
-        }
+        } else emptySet()
     }
 
     /** Validate cascaded field-level properties */
-    @Suppress("UNCHECKED_CAST")
     private fun <T : Any> validateCascadedProperty(
         context: ValidationContext<T>,
-        propertyDescriptor: PropertyDescriptor?,
+        isCollection: Boolean,
+        clazz: Class<*>,
         clazzInstance: Any,
         groups: List<Class<*>>
     ): Set<ConstraintViolation<T>> {
-        return when (propertyDescriptor?.cascadedType) {
-            null -> emptySet()
-            else -> {
-                // Update the found value with the current landscape, for example, the retrieved data class
-                // descriptor may be type Foo, but this property is a List<Foo> and we want to carry
-                // that property typing through.
-                val dataClassDescriptor =
-                    descriptorFactory
-                        .describe(clazz = propertyDescriptor.cascadedType.jvmErasure as KClass<T>)
-                        .copy(clazz = propertyDescriptor.clazz as KClass<T>)
+        val results = mutableListOf<ConstraintViolation<T>>()
+        if (clazz.kotlin.isData) { // only cascade into data classes; TODO("handle java records?")
+            val descriptor = descriptorFactory.describe(clazz = clazz)
+            val path = PathImpl.createCopy(context.path)
+            if (isCollection) {
+                val collectionValue: Iterable<*> = clazzInstance as Iterable<*>
+                val collectionValueIterator = collectionValue.iterator()
+                var index = 0
+                while (collectionValueIterator.hasNext()) {
+                    val instanceValue = collectionValueIterator.next()
+                    // apply the index to the parent path, then use this to recompute paths of members and methods
+                    val indexedPath = PathImpl.createCopyWithoutLeafNode(path)
+                    indexedPath.addPropertyNode("${path.leafNode.asString()}[${index}]")
 
-                val dataClassPath = PathImpl.createCopy(context.path)
-                when {
-                    Collection::class.java.isAssignableFrom(propertyDescriptor.clazz.java) -> {
-                        val results = mutableListOf<ConstraintViolation<T>>()
-                        val collectionValue: Iterable<*> = clazzInstance as Iterable<*>
-                        val collectionValueIterator = collectionValue.iterator()
-                        var index = 0
-                        while (collectionValueIterator.hasNext()) {
-                            val instanceValue = collectionValueIterator.next()
-                            // apply the index to the parent path, then use this to recompute paths of members and methods
-                            val indexedPath = PathImpl.createCopyWithoutLeafNode(dataClassPath)
-                            indexedPath.addPropertyNode(
-                                "${dataClassPath.leafNode.asString()}[${index}]"
-                            )
-
-                            val violations = validate(
-                                maybeDescriptor = dataClassDescriptor,
-                                context = context.copy(path = indexedPath),
-                                value = instanceValue,
-                                groups = groups
-                            )
-                            if (violations.isNotEmpty()) results.addAll(violations)
-                            index += 1
-                        }
-                        if (results.isNotEmpty()) results.toSet()
-                        else emptySet()
-                    }
-
-                    else -> validate(
-                        maybeDescriptor = dataClassDescriptor,
-                        context = context.copy(path = dataClassPath),
+                    val violations = validateDescriptor(
+                        descriptor = descriptor,
+                        context = context.copy(path = indexedPath),
+                        value = instanceValue,
+                        groups = groups
+                    )
+                    if (violations.isNotEmpty()) results.addAll(violations)
+                    index += 1
+                }
+            } else {
+                results.addAll(
+                    validateDescriptor(
+                        descriptor = descriptor,
+                        context = context.copy(path = path),
                         value = clazzInstance,
                         groups = groups
                     )
-                }
+                )
             }
         }
+
+        return results.toSet()
     }
 
-    /** Validate @MethodValidation annotated methods */
-    private fun <T : Any> validateMethod(
-        context: ValidationContext<T>,
-        methodDescriptor: ExecutableDescriptor<Any>,
-        clazzInstance: Any,
-        groups: List<Class<*>>
-    ): Set<ConstraintViolation<T>> = when (val annotation = methodDescriptor.annotations.find<MethodValidation>()) {
-        null -> emptySet()
-        else -> {
-            // if we're unable to invoke the method, we want this propagate
-            val constraintDescriptor = MethodValidationConstraintDescriptor(annotation as MethodValidation)
-            if (groupsEnabled(constraintDescriptor, groups)) {
-                try {
-                    val result: MethodValidationResult =
-                        methodDescriptor.callable.call(clazzInstance) as MethodValidationResult
-                    val pathWithMethodName = PathImpl.createCopy(context.path)
-                    pathWithMethodName.addPropertyNode(methodDescriptor.callable.name)
-                    parseMethodValidationFailures(
-                        rootClazz = context.rootClazz,
-                        root = context.root,
-                        leaf = clazzInstance,
-                        path = pathWithMethodName,
-                        annotation = annotation,
-                        result = result,
-                        value = clazzInstance,
-                        constraintDescriptor
-                    )
-                } catch (e: InvocationTargetException) {
-                    if (e.cause != null) throw e.cause!! else throw e
-                }
-            } else emptySet()
-        }
-    }
 
-    /** Validate class-level constraints */
-    private fun <T : Any> validateClazz(
+    /** Invoke method and validate result */
+    private fun <T : Any> executePostConstructValidations(
         context: ValidationContext<T>,
-        dataClassDescriptor: DataClassDescriptor<T>,
+        method: Method,
+        methodDescriptor: MethodDescriptor,
         clazzInstance: Any?,
         groups: List<Class<*>>
     ): Set<ConstraintViolation<T>> {
-        val constraints = dataClassDescriptor.annotations
-        return if (constraints.isNotEmpty()) {
+        val constraintDescriptor: ConstraintDescriptorImpl<PostConstructValidation> = methodDescriptor
+            .returnValueDescriptor
+            .constraintDescriptors.find { it.annotation.eq<PostConstructValidation>() } as? ConstraintDescriptorImpl<PostConstructValidation>
+            ?: throw ValidationException("Cannot find @${PostConstructValidation::class.simpleName} annotation on ${method.declaringClass::class.simpleName}#${method.name}()")
+        return if (groupsEnabled(constraintDescriptor, groups) && clazzInstance != null) {
+            try {
+                val postConstructValidationResult = method.invoke(clazzInstance) as PostConstructValidationResult
+                val pathWithMethodName = PathImpl.createCopy(context.path)
+                pathWithMethodName.addPropertyNode(method.name)
+                validatePostConstructValidation(
+                    context = context,
+                    clazzInstance = clazzInstance,
+                    path = pathWithMethodName,
+                    constraintDescriptor,
+                    constraintDescriptor.annotation,
+                    postConstructValidationResult
+                )
+            } catch (e: InvocationTargetException) {
+                if (e.cause != null) throw e.cause!! else throw e
+            }
+        } else emptySet()
+    }
+
+    private fun <T : Any> validateClazz(
+        context: ValidationContext<T>,
+        descriptor: BeanDescriptor,
+        clazzInstance: Any?,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> {
+        val constraintDescriptors: List<ConstraintDescriptor<*>> = descriptor.constraintDescriptors.toList()
+        return if (constraintDescriptors.isNotEmpty()) {
             val results = mutableListOf<ConstraintViolation<T>>()
             var index = 0
-            val length = constraints.size
+            val length = constraintDescriptors.size
             while (index < length) {
-                val annotation = constraints[index]
                 results.addAll(
                     isValid(
                         context = context,
-                        constraint = annotation,
-                        clazz = dataClassDescriptor.clazz.java,
+                        constraintDescriptor = (constraintDescriptors[index] as ConstraintDescriptorImpl<Annotation>),
+                        clazz = descriptor.elementClass as Class<out T>,
                         value = clazzInstance,
                         groups = groups
                     )
@@ -873,199 +830,355 @@ class DataClassValidator(
         } else emptySet()
     }
 
-    /** Recursively validate full data class */
-    @Suppress("UNCHECKED_CAST")
-    private tailrec fun <T : Any> validate(
-        maybeDescriptor: Descriptor?, context: ValidationContext<T>, value: Any?, groups: List<Class<*>>
-    ): Set<ConstraintViolation<T>> = when {
-        maybeDescriptor != null -> {
-            when (maybeDescriptor) {
-                is PropertyDescriptor -> {
-                    val propertyPath = PathImpl.createCopy(context.path)
-                    context.fieldName?.let { propertyPath.addPropertyNode(it) }
-                    // validateField will recurse back through validate for cascaded properties
-                    validateField(context.copy(path = propertyPath), maybeDescriptor, value, groups)
-                }
-
-                is DataClassDescriptor<*> -> {
-                    val dataClassDescriptor: DataClassDescriptor<T> = maybeDescriptor as DataClassDescriptor<T>
-                    val memberViolationResults = mutableListOf<ConstraintViolation<T>>()
-                    if (dataClassDescriptor.members.isNotEmpty()) {
-                        val keys: Iterable<String> = dataClassDescriptor.members.keys
-                        val keyIterator = keys.iterator()
-                        while (keyIterator.hasNext()) {
-                            val name = keyIterator.next()
-                            val propertyDescriptor = dataClassDescriptor.members[name]
-                            val propertyPath = PathImpl.createCopy(context.path)
-                            propertyPath.addPropertyNode(name)
-                            // validateField will recurse back through validate here for cascaded properties
-                            val fieldResults = validateField(
-                                context.copy(fieldName = name, path = propertyPath),
-                                propertyDescriptor,
-                                findFieldValue(value, dataClassDescriptor.type as Class<*>, name),
-                                groups
-                            )
-                            if (fieldResults.isNotEmpty()) memberViolationResults.addAll(fieldResults)
-                        }
-                    }
-                    val memberViolations = memberViolationResults.toSet()
-
-                    val methodViolationsResults = mutableListOf<ConstraintViolation<T>>()
-                    if (dataClassDescriptor.methods.isNotEmpty()) {
-                        var index = 0
-                        val length = dataClassDescriptor.methods.size
-                        while (index < length) {
-                            val methodResults = when (value) {
-                                null -> emptySet()
-                                else -> validateMethod(
-                                    context.copy(fieldName = null), dataClassDescriptor.methods[index], value, groups
-                                )
-                            }
-
-                            if (methodResults.isNotEmpty()) methodViolationsResults.addAll(methodResults)
-                            index += 1
-                        }
-                    }
-                    val methodViolations = methodViolationsResults.toSet()
-
-                    val clazzViolations = validateClazz(context, dataClassDescriptor, value, groups)
-
-                    // put them all together
-                    memberViolations + methodViolations + clazzViolations
-                }
-
-                else -> throw IllegalArgumentException("")
-            }
-        }
-
-        else -> {
+    private tailrec fun <T : Any> validateDescriptor(
+        descriptor: ElementDescriptor?,
+        context: ValidationContext<T>,
+        value: Any?,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> = when (descriptor) {
+        null -> {
             val clazz: Class<T> = value?.javaClass as Class<T>
             if (!value::class.isData) throw ValidationException("$clazz is not a valid data class.")
-            val dataClassDescriptor: DataClassDescriptor<T> = descriptorFactory.describe(clazz.kotlin)
-            validate(
-                dataClassDescriptor,
-                ValidationContext(
+            validateDescriptor(
+                descriptor = descriptorFactory.describe(clazz),
+                context = ValidationContext(
                     fieldName = null,
                     rootClazz = clazz,
                     root = value as T,
                     leaf = value,
                     path = PathImpl.createRootPath()
                 ),
+                value = value,
+                groups = groups
+            )
+        }
+
+        is PropertyDescriptor -> {
+            val propertyPath = PathImpl.createCopy(context.path)
+            context.fieldName?.let { propertyPath.addPropertyNode(it) }
+            // validateField will recurse back through validate for cascaded properties
+            validateField(
+                context.copy(path = propertyPath),
+                descriptor,
                 value,
                 groups
             )
         }
+
+        is BeanDescriptor -> {
+            val propertyViolationResults = mutableListOf<ConstraintViolation<T>>()
+            if (descriptor.constrainedProperties.isNotEmpty()) {
+                val iterator = descriptor.constrainedProperties.iterator()
+                while (iterator.hasNext()) {
+                    val propertyDescriptor = iterator.next()
+                    val propertyPath = PathImpl.createCopy(context.path)
+                    propertyPath.addPropertyNode(propertyDescriptor.propertyName)
+                    // validateField will recurse back through validate here for cascaded properties
+                    val fieldResults =
+                        validateField(
+                            context = context.copy(
+                                fieldName = propertyDescriptor.propertyName,
+                                path = propertyPath
+                            ),
+                            propertyDescriptor = propertyDescriptor,
+                            fieldValue = findFieldValue(
+                                value,
+                                descriptor.elementClass,
+                                propertyDescriptor.propertyName
+                            ),
+                            groups = groups
+                        )
+                    if (fieldResults.isNotEmpty()) propertyViolationResults.addAll(fieldResults)
+                }
+            }
+
+            val postConstructViolationsResults = mutableListOf<ConstraintViolation<T>>()
+            val methodDescriptors = descriptor.getConstrainedMethods(MethodType.NON_GETTER)
+            if (methodDescriptors.isNotEmpty()) {
+                val iterator = methodDescriptors.iterator()
+                while (iterator.hasNext()) {
+                    val methodDescriptor = iterator.next()
+                    if (isPostConstructValidationConstrainedMethod(methodDescriptor, value)) {
+                        val method = descriptor.elementClass.getMethod(
+                            /* name                 = */ methodDescriptor.name,
+                            /* ...parameterTypes    = */
+                            *methodDescriptor.parameterDescriptors.map { it.elementClass }.toTypedArray()
+                        )
+
+
+                        val methodResults =
+                            executePostConstructValidations(
+                                context = context.copy(
+                                    fieldName = methodDescriptor.name
+                                ),
+                                method = method,
+                                methodDescriptor = methodDescriptor,
+                                clazzInstance = value,
+                                groups = groups
+                            )
+
+                        if (methodResults.isNotEmpty()) postConstructViolationsResults.addAll(methodResults)
+                    }
+                }
+            }
+
+            val clazzViolations = validateClazz(context, descriptor, value, groups)
+
+            // put them all together
+            propertyViolationResults.toSet() + postConstructViolationsResults.toSet() + clazzViolations
+        }
+
+        else ->
+            throw ValidationException("Invalid descriptor type: ${descriptor::class.java.name}")
     }
 
-    // END: Recursive validation methods -------------------------------------------------------------
+    // END: Recursive validation methods -------------------------------------------------------------------------------
 
-    /** Validate Executable field-level parameters (including cross-field parameters) */
-    @Suppress("UNCHECKED_CAST")
-    private fun <T : Any> validateExecutableParameters(
-        executableDescriptor: ExecutableDescriptor<T>,
-        root: T?,
-        leaf: Any?,
-        parameterValues: List<Any?>,
-        parameterNames: List<String>?,
+    private fun <T : Any> validateReturnValue(
+        context: ValidationContext<T>,
+        executableDescriptor: ExecutableDescriptor,
+        value: Any?,
         groups: List<Class<*>>
     ): Set<ConstraintViolation<T>> {
-        if (executableDescriptor.members.size != parameterValues.size) throw IllegalArgumentException(
-            "Invalid number of arguments for method ${executableDescriptor.callable.name}."
-        )
-        val results = mutableListOf<ConstraintViolation<T>>()
-        val parameters: List<KParameter> =
-            executableDescriptor.callable.parameters.filter { it.kind == KParameter.Kind.VALUE }
-        val parameterNamesList: List<String> =
-            parameterNames ?: getExecutableParameterNames(executableDescriptor.callable as KFunction<*>)
+        val results = mutableSetOf<ConstraintViolation<T>>()
+        val returnValueConstraintDescriptors = executableDescriptor.returnValueDescriptor.constraintDescriptors
+        val iterator = returnValueConstraintDescriptors.iterator()
+        while (iterator.hasNext()) {
+            val returnValueConstraintDescriptor = iterator.next() as ConstraintDescriptorImpl<*>
+            results.addAll(
+                validateConstraintDescriptor(
+                    context = context,
+                    constraintDescriptor = returnValueConstraintDescriptor,
+                    clazz = executableDescriptor.returnValueDescriptor.elementClass,
+                    value = value,
+                    groups = groups
+                )
+            )
+        }
 
-        // executable parameter constraints
+        return results.toSet()
+    }
+
+    private fun <T : Any> validateParameters(
+        obj: T?,
+        executable: Executable,
+        executableDescriptor: ExecutableDescriptor,
+        parameterValues: Array<Any?>,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> {
+        if (parameterValues.size != executable.parameterCount) {
+            val executableAsString =
+                ExecutableHelper.getExecutableAsString(
+                    /* name                 = */ executableDescriptor
+                        .returnValueDescriptor
+                        .elementClass.toString() + "#" + executableDescriptor.name,
+                    /* ...parameterTypes    = */ *executable.parameterTypes
+                )
+            throw IllegalArgumentException(
+                "Wrong number of parameters. Method or constructor $executableAsString " +
+                        "expects ${executable.parameterCount} parameters, but got ${parameterValues.size}."
+            )
+        }
+
+        val rootBeanClazz = obj?.javaClass ?: executable.declaringClass as Class<T>
+
+        val results = mutableSetOf<ConstraintViolation<T>>()
+        val parameterNames = DescriptorFactory.getExecutableParameterNames(executable)
+        val size = parameterNames.size
         var index = 0
-        val parametersLength = parameterNamesList.size
-        while (index < parametersLength) {
-            val parameter = parameters[index]
+        while (index < size) {
             val parameterValue = parameterValues[index]
-            // only for property path use to affect error reporting
-            val parameterName = parameterNamesList[index]
+            val parameterName = parameterNames[index]
+            val parameterDescriptor = executableDescriptor.parameterDescriptors.find { it.name == parameterName }
+            when (parameterDescriptor) {
+                null -> Unit // not constrained -- skip
+                else -> {
+                    parameterDescriptor.constraintDescriptors.forEach { constraintDescriptor: ConstraintDescriptor<*>? ->
+                        val parameterPath = PathImpl.createPathForExecutable(getExecutableMetaData(executable))
+                        val context = ValidationContext(
+                            fieldName = parameterDescriptor.name,
+                            rootClazz = rootBeanClazz,
+                            root = obj,
+                            leaf = obj,
+                            path = parameterPath
+                        )
 
-            val parameterPath =
-                PathImpl.createPathForExecutable(getExecutableMetaData(executableDescriptor.callable as KFunction<*>))
-            parameterPath.addParameterNode(parameterName, index)
-
-            val propertyDescriptor = executableDescriptor.members[parameter.name]
-            val validateFieldContext = ValidationContext(
-                parameterName, executableDescriptor.declaringClass as Class<T>, root, leaf, parameterPath
-            )
-            val parameterViolations = validateField(
-                validateFieldContext, propertyDescriptor, parameterValue, groups
-            )
-            if (parameterViolations.isNotEmpty()) results.addAll(parameterViolations)
+                        if (constraintDescriptor != null) {
+                            parameterPath.addParameterNode(parameterDescriptor.name, index)
+                            results.addAll(
+                                validateConstraintDescriptor(
+                                    context = context.copy(path = parameterPath),
+                                    constraintDescriptor = constraintDescriptor,
+                                    clazz = parameterDescriptor.elementClass,
+                                    value = parameterValue,
+                                    groups = groups.toList()
+                                )
+                            )
+                        }
+                        // Cannot cascade a null value
+                        if (parameterValue != null) {
+                            if (parameterDescriptor.isCascaded) {
+                                results.addAll(
+                                    if (parameterDescriptor.constrainedContainerElementTypes.isNotEmpty()) {
+                                        // need to cascade the constrained container element type, multi type containers are not supported
+                                        // thus we only read the first constrained container element type
+                                        validateCascadedProperty(
+                                            context = context,
+                                            isCollection = true,
+                                            clazz = parameterDescriptor.constrainedContainerElementTypes.first().elementClass,
+                                            clazzInstance = parameterValue,
+                                            groups = groups
+                                        )
+                                    } else {
+                                        validateCascadedProperty(
+                                            context = context,
+                                            isCollection = false,
+                                            clazz = parameterDescriptor.elementClass,
+                                            clazzInstance = parameterValue,
+                                            groups = groups
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             index += 1
         }
-        results.toSet()
 
-        // executable cross-parameter constraints
-        val crossParameterPath =
-            PathImpl.createPathForExecutable(getExecutableMetaData(executableDescriptor.callable as KFunction<*>))
-        crossParameterPath.addCrossParameterNode()
-        val constraints = executableDescriptor.annotations
-        index = 0
-        val constraintsLength = constraints.size
-        while (index < constraintsLength) {
-            val constraint = constraints[index]
-            val validators =
-                findConstraintValidators(constraint.annotationClass).filter(parametersValidationTargetFilter)
+        // cross-parameter validation
+        if (executableDescriptor.crossParameterDescriptor != null) {
+            val executablePath = PathImpl.createPathForExecutable(getExecutableMetaData(executable))
+            executablePath.addCrossParameterNode()
 
-            val validatorsIterator = validators.iterator()
-            while (validatorsIterator.hasNext()) {
-                val validator = validatorsIterator.next()
-                val constraintDescriptor = constraintDescriptorFactory.newConstraintDescriptor(
-                    name = executableDescriptor.callable.name,
-                    clazz = parameterValues::class.java,
-                    declaringClazz = executableDescriptor.declaringClass,
-                    annotation = constraint,
-                    constrainedElementKind = ConstrainedElement.ConstrainedElementKind.METHOD
-                )
-                if (groupsEnabled(constraintDescriptor, groups)) {
-                    // initialize validator
-                    (validator as ConstraintValidator<Annotation, *>).initialize(constraint)
-                    val validateCrossParameterContext = ValidationContext(
-                        null, executableDescriptor.declaringClass as Class<T>, root, leaf, crossParameterPath
+            executableDescriptor.crossParameterDescriptor.constraintDescriptors.forEach { constraintDescriptor ->
+                results.addAll(
+                    validateConstraintDescriptor(
+                        context = ValidationContext(
+                            fieldName = executableDescriptor.name,
+                            rootClazz = rootBeanClazz,
+                            root = obj,
+                            leaf = obj,
+                            path = executablePath
+                        ),
+                        constraintDescriptor = constraintDescriptor,
+                        clazz = executableDescriptor.crossParameterDescriptor.elementClass,
+                        value = parameterValues,
+                        groups = groups.toList()
                     )
-                    results.addAll(
-                        isValid(
-                            context = validateCrossParameterContext,
+                )
+            }
+        }
+
+        return results.toSet()
+    }
+
+    private fun isPostConstructValidationConstrainedMethod(methodDescriptor: MethodDescriptor?, value: Any?): Boolean =
+        methodDescriptor != null && value != null &&
+                (methodDescriptor.returnValueDescriptor != null &&
+                        methodDescriptor
+                            .returnValueDescriptor
+                            .constraintDescriptors
+                            .any { it.annotation.eq<PostConstructValidation>() })
+
+    private fun <T : Any> validatePostConstructValidation(
+        context: ValidationContext<T>,
+        clazzInstance: Any,
+        path: PathImpl,
+        constraintDescriptor: ConstraintDescriptorImpl<PostConstructValidation>,
+        constraint: PostConstructValidation,
+        returnValue: PostConstructValidationResult
+    ): Set<ConstraintViolation<T>> {
+        val results = mutableSetOf<ConstraintViolation<T>>()
+        if (returnValue.isInstanceOf<PostConstructValidationResult.Invalid>()) {
+            val invalidResult = returnValue as PostConstructValidationResult.Invalid
+            val annotationFields: List<String> = constraint.fields.filter { it.isNotEmpty() }
+            if (annotationFields.isNotEmpty()) {
+                var index = 0
+                val length = annotationFields.size
+                while (index < length) {
+                    val fieldName = annotationFields[index]
+                    val parameterPath = PathImpl.createCopy(path)
+                    parameterPath.addParameterNode(fieldName, index)
+                    results.add(
+                        constraintViolationHelper.newPostConstructValidationConstraintViolation(
                             constraint = constraint,
-                            clazz = parameterValues::class.java as Class<T>,
-                            value = parameterValues,
-                            constraintDescriptorOption = constraintDescriptor,
-                            validatorOption = validator as ConstraintValidator<Annotation, Any>,
-                            groups = groups
+                            message = invalidResult.message,
+                            path = parameterPath,
+                            invalidValue = ClassHelper.getFieldValue(clazzInstance, fieldName),
+                            rootClazz = context.rootClazz as Class<T>,
+                            root = context.root,
+                            leaf = clazzInstance,
+                            constraintDescriptor = constraintDescriptor,
+                            payload = invalidResult.payload
                         )
                     )
+                    index += 1
                 }
+            } else {
+                results.add(
+                    constraintViolationHelper.newPostConstructValidationConstraintViolation(
+                        constraint = constraint,
+                        message = invalidResult.message,
+                        path = path,
+                        invalidValue = clazzInstance,
+                        rootClazz = context.rootClazz as Class<T>,
+                        root = context.root,
+                        leaf = clazzInstance,
+                        constraintDescriptor = constraintDescriptor,
+                        payload = invalidResult.payload
+                    )
+                )
             }
-            index += 1
+
         }
         return results.toSet()
     }
 
-    /** Validate method-level constraints, i.e., @MethodValidation annotated methods */
-    private fun <T : Any> validateMethods(
-        rootClazz: Class<T>, root: T, methods: List<ExecutableDescriptor<Any>>, obj: T, groups: List<Class<*>>
+    @Suppress("UNCHECKED_CAST")
+    private fun <T : Any> validateConstraintDescriptor(
+        context: ValidationContext<T>,
+        clazz: Class<*>,
+        constraintDescriptor: ConstraintDescriptor<out Annotation>,
+        value: Any?,
+        groups: List<Class<*>>
     ): Set<ConstraintViolation<T>> {
-        val results = mutableListOf<ConstraintViolation<T>>()
-        if (methods.isNotEmpty()) {
-            var index = 0
-            val length = methods.size
-            while (index < length) {
-                val methodDescriptor = methods[index]
-                val validateMethodContext = ValidationContext(null, rootClazz, root, obj, PathImpl.createRootPath())
-                results.addAll(
-                    validateMethod(validateMethodContext, methodDescriptor, obj, groups)
+        val results = mutableSetOf<ConstraintViolation<T>>()
+
+        if (isValidationEnabled(value, constraintDescriptor, groups)) {
+            val validators: Set<ConstraintValidator<Annotation, Any>> =
+                ConstraintValidatorFactoryHelper.findInitializedConstraintValidator(
+                    context = context,
+                    validatorFactory = validatorFactory,
+                    constraintValidatorManager = constraintValidatorManager,
+                    constraintDescriptor = constraintDescriptor as ConstraintDescriptorImpl<Annotation>,
+                    clazz = clazz,
+                    value = value
                 )
-                index += 1
+
+            val constraintValidatorContext: ConstraintValidatorContext =
+                constraintValidatorContextFactory
+                    .newConstraintValidatorContext(context.path, constraintDescriptor)
+
+            validators.forEach { validator ->
+                if (!validator.isValid(value, constraintValidatorContext)) {
+                    results.addAll(
+                        constraintViolationHelper.buildConstraintViolations(
+                            rootClazz = context.rootClazz,
+                            root = context.root,
+                            leaf = context.leaf,
+                            path = context.path,
+                            invalidValue = value,
+                            constraintDescriptor = constraintDescriptor,
+                            constraintValidatorContext = constraintValidatorContext
+                        )
+                    )
+                }
             }
+
+
         }
         return results.toSet()
     }
@@ -1101,32 +1214,24 @@ class DataClassValidator(
         else groups.any { groupsFromAnnotation.contains(it) }
     }
 
-    private val getExecutableParameterNames = ::getExecutableParameterNamesFn.memoize()
-
-    /** @note this method is memoized as it should only ever need to be calculated once for a given [KFunction] */
-    private fun getExecutableParameterNamesFn(kFunction: KFunction<*>): List<String> =
-        kFunction.parameters.filter { it.kind == KParameter.Kind.VALUE }.map { it.name!! }
-
-    private val parametersValidationTargetFilter = ::parametersValidationTargetFilterFn.memoize()
-
-    /** @note this method is memoized as it should only ever need to be calculated once for a given [[ConstraintValidator]] */
-    private fun parametersValidationTargetFilterFn(constraintValidator: ConstraintValidator<*, *>): Boolean {
-        return when (val annotation = constraintValidator::class.annotations.find(SupportedValidationTarget::class)) {
-            null -> false
-            else -> (annotation as SupportedValidationTarget).value.contains(ValidationTarget.PARAMETERS)
-        }
-    }
+    /** The value isn't ignorable, and the groups are enabled for the given constraint descriptor */
+    private fun isValidationEnabled(
+        value: Any?,
+        constraintDescriptor: ConstraintDescriptor<*>,
+        groups: List<Class<*>>
+    ): Boolean =
+        (!ignorable(value, constraintDescriptor.annotation) && groupsEnabled(constraintDescriptor, groups))
 
     private val getExecutableMetaData = ::getExecutableMetaDataFn.memoize()
 
     /** @note this method is memoized as it should only ever need to be calculated once for a given [KFunction] */
-    private fun getExecutableMetaDataFn(kFunction: KFunction<*>): ExecutableMetaData {
-        val callable = when {
-            kFunction.javaConstructor != null ->
-                JavaBeanFactory.newJavaBeanConstructor(kFunction.javaConstructor)
+    private fun getExecutableMetaDataFn(executable: Executable): ExecutableMetaData {
+        val callable = when (executable) {
+            is Constructor<*> ->
+                JavaBeanFactory.newJavaBeanConstructor(executable)
 
-            kFunction.javaMethod != null ->
-                JavaBeanFactory.newJavaBeanMethod(kFunction.javaMethod)
+            is Method ->
+                JavaBeanFactory.newJavaBeanMethod(executable)
 
             else -> throw IllegalArgumentException("")
         }
@@ -1146,17 +1251,19 @@ class DataClassValidator(
                 Collections.emptySet(),
                 CascadingMetaDataBuilder.nonCascading()
             ),
-            validatorFactory.getConstraintCreationContext(),
-            validatorFactory.getExecutableHelper(),
-            validatorFactory.getExecutableParameterNameProvider(),
-            validatorFactory.getMethodValidationConfiguration()
+            validatorFactory.constraintCreationContext,
+            validatorFactory.executableHelper,
+            validatorFactory.executableParameterNameProvider,
+            validatorFactory.methodValidationConfiguration
         )
 
         return builder.build()
     }
 
     private fun <T : Any> findFieldValue(
-        obj: Any?, clazz: Class<T>, name: String
+        obj: Any?,
+        clazz: Class<T>,
+        name: String
     ): Any? = obj.mapNotNull { instance ->
         try {
             val field = clazz.getDeclaredField(name)
@@ -1165,60 +1272,6 @@ class DataClassValidator(
         } catch (e: Exception) {
             if (NonFatal.isNonFatal(e)) throw ValidationException(e)
             else throw e
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun <T : Any> parseMethodValidationFailures(
-        rootClazz: Class<T>?,
-        root: T?,
-        leaf: Any?,
-        path: PathImpl,
-        annotation: MethodValidation,
-        result: MethodValidationResult,
-        value: Any,
-        constraintDescriptor: ConstraintDescriptor<*>
-    ): Set<ConstraintViolation<T>> {
-        fun methodValidationConstraintViolation(
-            validationPath: PathImpl, message: String?, payload: Payload?
-        ): ConstraintViolation<T> = constraintViolationFactory.newConstraintViolation(
-            messageTemplate = annotation.message,
-            interpolatedMessage = message,
-            path = validationPath,
-            invalidValue = value as T,
-            rootClazz = rootClazz,
-            root = root,
-            leaf = leaf,
-            constraintDescriptor = constraintDescriptor,
-            payload = payload
-        )
-
-        return when (result) {
-            is MethodValidationResult.Invalid -> {
-                val results = mutableSetOf<ConstraintViolation<T>>()
-                val annotationFields: List<String> = annotation.fields.filter { it.isNotEmpty() }
-                if (annotationFields.isNotEmpty()) {
-                    var index = 0
-                    val length = annotationFields.size
-                    while (index < length) {
-                        val fieldName = annotationFields[index]
-                        val parameterPath = PathImpl.createCopy(path)
-                        parameterPath.addParameterNode(fieldName, index)
-                        results.add(
-                            methodValidationConstraintViolation(
-                                parameterPath, result.message, result.payload
-                            )
-                        )
-                        index += 1
-                    }
-                    if (results.isNotEmpty()) results.toSet()
-                    else emptySet()
-                } else {
-                    setOf(methodValidationConstraintViolation(path, result.message, result.payload))
-                }
-            }
-
-            else -> emptySet()
         }
     }
 }

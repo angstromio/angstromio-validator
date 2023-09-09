@@ -1,9 +1,9 @@
 package angstromio.validation.constraints
 
 import angstromio.validation.DataClassValidator
-import angstromio.validation.testclasses.OneOfExample
-import angstromio.validation.testclasses.OneOfInvalidTypeExample
-import angstromio.validation.testclasses.OneOfListExample
+import angstromio.validation.TestClasses.OneOfExample
+import angstromio.validation.TestClasses.OneOfInvalidTypeExample
+import angstromio.validation.TestClasses.OneOfListExample
 import io.kotest.matchers.be
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.should
@@ -101,5 +101,5 @@ class OneOfConstraintValidatorTest : ConstraintValidatorTest() {
     }
 
     private inline fun <reified T : Any> validate(value: Any?): Set<ConstraintViolation<T>> =
-        super.validate<OneOf, T>(T::class, testFieldName, value)
+        super.validate<OneOf, T>(T::class.java, testFieldName, value)
 }

@@ -3,13 +3,13 @@ package angstromio.validation.engine
 import angstromio.util.control.NonFatal
 import jakarta.validation.Payload
 
-sealed interface MethodValidationResult {
+sealed interface PostConstructValidationResult {
     fun payload(): Payload?
     fun isValid(): Boolean
 
     object EmptyPayload : Payload
 
-    data object Valid : MethodValidationResult {
+    data object Valid : PostConstructValidationResult {
         override fun payload(): Payload? = null
         override fun isValid(): Boolean = true
     }
@@ -17,7 +17,7 @@ sealed interface MethodValidationResult {
     data class Invalid(
         val message: String?,
         val payload: Payload? = null
-    ) : MethodValidationResult {
+    ) : PostConstructValidationResult {
         override fun payload(): Payload? = this.payload
         override fun isValid(): Boolean = false
     }
@@ -27,7 +27,7 @@ sealed interface MethodValidationResult {
             condition: () -> Boolean,
             message: () -> String,
             payload: Payload? = null
-        ): MethodValidationResult {
+        ): PostConstructValidationResult {
             return try {
                 when (condition.invoke()) {
                     true -> Valid
@@ -45,7 +45,7 @@ sealed interface MethodValidationResult {
             condition: () -> Boolean,
             message: () -> String,
             payload: Payload? = null
-        ): MethodValidationResult {
+        ): PostConstructValidationResult {
 
             return try {
                 when (condition.invoke()) {

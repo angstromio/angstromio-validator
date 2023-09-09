@@ -8,13 +8,12 @@ import angstromio.validation.constraints.InvalidConstraint
 import angstromio.validation.constraints.InvalidConstraintValidator
 import angstromio.validation.constraints.NotEmptyAnyConstraintValidator
 import angstromio.validation.constraints.NotEmptyPathConstraintValidator
+import angstromio.validation.constraints.PostConstructValidation
 import angstromio.validation.constraints.StateConstraint
 import angstromio.validation.constraints.StateConstraintPayload
 import angstromio.validation.constraints.ValidPassengerCount
 import angstromio.validation.constraints.ValidPassengerCountConstraintValidator
 import angstromio.validation.extensions.getDynamicPayload
-import angstromio.validation.metadata.DataClassDescriptor
-import angstromio.validation.metadata.PropertyDescriptor
 import io.kotest.matchers.be
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.matchers.nulls.beNull
@@ -31,35 +30,40 @@ import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.NotEmpty
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
+import jakarta.validation.metadata.BeanDescriptor
+import jakarta.validation.metadata.ConstructorDescriptor
+import jakarta.validation.metadata.ContainerElementTypeDescriptor
+import jakarta.validation.metadata.MethodDescriptor
+import jakarta.validation.metadata.PropertyDescriptor
+import jakarta.validation.metadata.ReturnValueDescriptor
 import org.hibernate.validator.HibernateValidatorConfiguration
 import org.hibernate.validator.internal.util.annotation.AnnotationDescriptor
 import org.hibernate.validator.internal.util.annotation.AnnotationFactory
 import org.junit.jupiter.api.assertThrows
 import java.time.LocalDate
 import java.util.*
-import kotlin.reflect.KClass
 import kotlin.reflect.KTypeProjection
 import kotlin.reflect.KVariance
 import kotlin.reflect.full.createType
 import kotlin.reflect.full.primaryConstructor
-import kotlin.reflect.javaType
+import kotlin.reflect.jvm.javaType
+import kotlin.reflect.jvm.jvmErasure
 
-@OptIn(ExperimentalStdlibApi::class)
-class DataClassValidatorTest : AssertViolationTest() {
+class ValidatorTest : AssertViolationTest() {
     companion object {
-        val DefaultAddress: testclasses.Address =
-            testclasses.Address(line1 = "1234 Main St", city = "Anywhere", state = "CA", zipcode = "94102")
+        val DefaultAddress: TestClasses.Address =
+            TestClasses.Address(line1 = "1234 Main St", city = "Anywhere", state = "CA", zipcode = "94102")
 
         val CustomConstraintMappings: Set<ConstraintMapping> =
             setOf(
                 ConstraintMapping(
-                    ValidPassengerCount::class,
-                    ValidPassengerCountConstraintValidator::class,
+                    ValidPassengerCount::class.java,
+                    ValidPassengerCountConstraintValidator::class.java,
                     includeExistingValidators = false
                 ),
                 ConstraintMapping(
-                    InvalidConstraint::class,
-                    InvalidConstraintValidator::class
+                    InvalidConstraint::class.java,
+                    InvalidConstraintValidator::class.java
                 )
             )
     }
@@ -80,7 +84,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                 .withMessageInterpolator(WrongMessageInterpolator())
                 .validator()
             try {
-                val car = testclasses.SmallCar(null, "DD-AB-123", 4)
+                val car = TestClasses.SmallCar(null, "DD-AB-123", 4)
                 val violations = withCustomMessageInterpolator.validate(car)
                 assertViolations(
                     violations = violations,
@@ -89,7 +93,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                             "manufacturer",
                             "Whatever you entered was wrong",
                             null,
-                            testclasses.SmallCar::class.java,
+                            TestClasses.SmallCar::class.java,
                             car
                         )
                     )
@@ -113,7 +117,7 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#unicode field name") {
-            val value = testclasses.UnicodeNameDataClass(5, "")
+            val value = TestClasses.UnicodeNameDataClass(5, "")
 
             assertViolations(
                 obj = value,
@@ -122,29 +126,29 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "name",
                         "must not be empty",
                         "",
-                        testclasses.UnicodeNameDataClass::class.java,
+                        TestClasses.UnicodeNameDataClass::class.java,
                         value,
-                        getValidationAnnotations(testclasses.UnicodeNameDataClass::class, "name").last()
+                        getValidationAnnotations(TestClasses.UnicodeNameDataClass::class.java, "name").last()
                     ),
                     WithViolation(
                         "winning-id",
                         "must be less than or equal to 3",
                         5,
-                        testclasses.UnicodeNameDataClass::class.java,
+                        TestClasses.UnicodeNameDataClass::class.java,
                         value,
-                        getValidationAnnotations(testclasses.UnicodeNameDataClass::class, "winning-id").last()
+                        getValidationAnnotations(TestClasses.UnicodeNameDataClass::class.java, "winning-id").last()
                     ),
                 )
             )
         }
 
         test("DataClassValidator#correctly handle not cascading for a non-data class type") {
-            val value = testclasses.WithBogusCascadedField("DD-AB-123", listOf(1, 2, 3))
+            val value = TestClasses.WithBogusCascadedField("DD-AB-123", listOf(1, 2, 3))
             assertViolations(value)
         }
 
         test("DataClassValidator#with InvalidConstraint") {
-            val value = testclasses.AlwaysFails("fails")
+            val value = TestClasses.AlwaysFails("fails")
 
             val e = assertThrows<RuntimeException> {
                 validator.validate(value)
@@ -152,9 +156,9 @@ class DataClassValidatorTest : AssertViolationTest() {
             e.message should be("FORCED TEST EXCEPTION")
         }
 
-        test("DataClassValidator#with failing MethodValidation") {
-            // fails the @NotEmpty on the id field but the method validation blows up
-            val value = testclasses.AlwaysFailsMethodValidation("")
+        test("DataClassValidator#with failing PostConstructValidation") {
+            // fails the @NotEmpty on the id field but the post construct validation blows up
+            val value = TestClasses.AlwaysFailsPostConstructValidation("")
 
             val e = assertThrows<ValidationException> {
                 validator.validate(value)
@@ -174,7 +178,7 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#constraint mapping 1") {
-            val value = testclasses.PathNotEmpty(testclasses.TestPath.Empty, "abcd1234")
+            val value = TestClasses.PathNotEmpty(TestClasses.TestPath.Empty, "abcd1234")
 
             // no validator registered `@NotEmpty` for Path type
             assertThrows<UnexpectedTypeException> {
@@ -184,7 +188,7 @@ class DataClassValidatorTest : AssertViolationTest() {
             // define an additional constraint validator for `@NotEmpty` which works for
             // Path types. note we include all existing validators
             val pathCustomConstraintMapping =
-                ConstraintMapping(NotEmpty::class, NotEmptyPathConstraintValidator::class)
+                ConstraintMapping(NotEmpty::class.java, NotEmptyPathConstraintValidator::class.java)
 
             val withPathConstraintValidator: DataClassValidator =
                 DataClassValidator
@@ -196,13 +200,13 @@ class DataClassValidatorTest : AssertViolationTest() {
                 violations.size should be(1)
                 violations.first().propertyPath.toString() should be("path")
                 violations.first().message should be("must not be empty")
-                violations.first().rootBeanClass should be(testclasses.PathNotEmpty::class.java)
+                violations.first().rootBeanClass should be(TestClasses.PathNotEmpty::class.java)
                 violations.first().rootBean should be(value)
-                violations.first().invalidValue should be(testclasses.TestPath.Empty)
+                violations.first().invalidValue should be(TestClasses.TestPath.Empty)
 
                 // valid instance
                 withPathConstraintValidator
-                    .validate(testclasses.PathNotEmpty(testclasses.TestPath("node"), "abcd1234"))
+                    .validate(TestClasses.PathNotEmpty(TestClasses.TestPath("node"), "abcd1234"))
                     .isEmpty() should be(true)
             } finally {
                 withPathConstraintValidator.close()
@@ -213,8 +217,8 @@ class DataClassValidatorTest : AssertViolationTest() {
             // fail since we can no longer find a validator for `@NotEmpty` which works for string
             val pathCustomConstraintMapping2 =
                 ConstraintMapping(
-                    NotEmpty::class,
-                    NotEmptyPathConstraintValidator::class,
+                    NotEmpty::class.java,
+                    NotEmptyPathConstraintValidator::class.java,
                     includeExistingValidators = false
                 )
 
@@ -233,9 +237,9 @@ class DataClassValidatorTest : AssertViolationTest() {
         test("DataClassValidator#constraint mapping 2") {
             // attempting to add a mapping for the same annotation multiple times will result in an error
             val pathCustomConstraintMapping1 =
-                ConstraintMapping(NotEmpty::class, NotEmptyPathConstraintValidator::class)
+                ConstraintMapping(NotEmpty::class.java, NotEmptyPathConstraintValidator::class.java)
             val pathCustomConstraintMapping2 =
-                ConstraintMapping(NotEmpty::class, NotEmptyAnyConstraintValidator::class)
+                ConstraintMapping(NotEmpty::class.java, NotEmptyAnyConstraintValidator::class.java)
 
             val e1 = assertThrows<ValidationException> {
                 DataClassValidator.builder()
@@ -249,11 +253,11 @@ class DataClassValidatorTest : AssertViolationTest() {
             )
 
             val pathCustomConstraintMapping3 =
-                ConstraintMapping(NotEmpty::class, NotEmptyPathConstraintValidator::class)
+                ConstraintMapping(NotEmpty::class.java, NotEmptyPathConstraintValidator::class.java)
             val pathCustomConstraintMapping4 =
                 ConstraintMapping(
-                    NotEmpty::class,
-                    NotEmptyAnyConstraintValidator::class,
+                    NotEmpty::class.java,
+                    NotEmptyAnyConstraintValidator::class.java,
                     includeExistingValidators = false
                 )
 
@@ -271,12 +275,12 @@ class DataClassValidatorTest : AssertViolationTest() {
 
             val pathCustomConstraintMapping5 =
                 ConstraintMapping(
-                    NotEmpty::class,
-                    NotEmptyPathConstraintValidator::class,
+                    NotEmpty::class.java,
+                    NotEmptyPathConstraintValidator::class.java,
                     includeExistingValidators = false
                 )
             val pathCustomConstraintMapping6 =
-                ConstraintMapping(NotEmpty::class, NotEmptyAnyConstraintValidator::class)
+                ConstraintMapping(NotEmpty::class.java, NotEmptyAnyConstraintValidator::class.java)
 
             val e3 = assertThrows<ValidationException> {
                 DataClassValidator.builder()
@@ -292,14 +296,14 @@ class DataClassValidatorTest : AssertViolationTest() {
 
             val pathCustomConstraintMapping7 =
                 ConstraintMapping(
-                    NotEmpty::class,
-                    NotEmptyPathConstraintValidator::class,
+                    NotEmpty::class.java,
+                    NotEmptyPathConstraintValidator::class.java,
                     includeExistingValidators = false
                 )
             val pathCustomConstraintMapping8 =
                 ConstraintMapping(
-                    NotEmpty::class,
-                    NotEmptyAnyConstraintValidator::class,
+                    NotEmpty::class.java,
+                    NotEmptyAnyConstraintValidator::class.java,
                     includeExistingValidators = false
                 )
 
@@ -318,7 +322,7 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#payload") {
             val address =
-                testclasses.Address(line1 = "1234 Main St", city = "Anywhere", state = "PA", zipcode = "94102")
+                TestClasses.Address(line1 = "1234 Main St", city = "Anywhere", state = "PA", zipcode = "94102")
             val violations = validator.validate(address)
             violations.size shouldBeEqual 1
             val violation = violations.first()
@@ -330,21 +334,21 @@ class DataClassValidatorTest : AssertViolationTest() {
             }
         }
 
-        test("DataClassValidator#method validation payload") {
-            val user = testclasses.NestedUser(
+        test("DataClassValidator#post construct validation payload") {
+            val user = TestClasses.NestedUser(
                 id = "abcd1234",
-                person = testclasses.Person("abcd1234", "R. Franklin", DefaultAddress),
+                person = TestClasses.Person("abcd1234", "R. Franklin", DefaultAddress),
                 gender = "F",
                 job = ""
             )
             val violations = validator.validate(user)
             violations.size shouldBeEqual 1
             val violation = violations.first()
-            val payload = violation.getDynamicPayload(testclasses.NestedUserPayload::class.java)
+            val payload = violation.getDynamicPayload(TestClasses.NestedUserPayload::class.java)
             assert(payload != null)
             payload?.let {
-                testclasses.NestedUserPayload::class.java.isAssignableFrom(payload::class.java) should be(true)
-                payload should be(testclasses.NestedUserPayload("abcd1234", ""))
+                TestClasses.NestedUserPayload::class.java.isAssignableFrom(payload::class.java) should be(true)
+                payload should be(TestClasses.NestedUserPayload("abcd1234", ""))
             }
         }
 
@@ -382,7 +386,7 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         @Suppress("UNCHECKED_CAST")
         test("DataClassValidator#constraint validators by annotation class") {
-            val validators = validator.findConstraintValidators(CountryCode::class)
+            val validators = validator.findConstraintValidators(CountryCode::class.java)
             validators.size shouldBeEqual 1
             validators.first()::class.java.name should be(
                 ISO3166CountryCodeConstraintValidator::class.java.name
@@ -392,35 +396,35 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#nulls") {
-            val car = testclasses.SmallCar(null, "DD-AB-123", 4)
+            val car = TestClasses.SmallCar(null, "DD-AB-123", 4)
             assertViolations(
                 obj = car,
                 withViolations = listOf(
-                    WithViolation("manufacturer", "must not be null", null, testclasses.SmallCar::class.java, car)
+                    WithViolation("manufacturer", "must not be null", null, TestClasses.SmallCar::class.java, car)
                 )
             )
         }
 
         test("DataClassValidator#not a data class") {
-            val value = testclasses.NotADataClass(null, "DD-AB-123", 4, "NotAUUID")
+            val value = TestClasses.NotADataClass(null, "DD-AB-123", 4, "NotAUUID")
             val e = assertThrows<ValidationException> {
                 validator.validate(value)
             }
-            e.message should be("${testclasses.NotADataClass::class.java} is not a valid data class.")
+            e.message should be("${TestClasses.NotADataClass::class.java} is not a valid data class.")
 
-            // underlying validator doesn't find the annotations (either executable nor inherited)
+            // underlying validator doesn't find the constraintDescriptors (either executable nor inherited)
             val violations = validator.underlying.validate(value).toSet()
             violations.isEmpty() should be(true)
         }
 
         test("DataClassValidator#fails with @set meta annotation") {
-            val value = testclasses.WithMetaSetAnnotation("")
+            val value = TestClasses.WithMetaSetAnnotation("")
 
             assertThrows<ConstraintDeclarationException> { assertViolations(obj = value, withViolations = emptyList()) }
             // this also fails with underlying validator
             assertThrows<ConstraintDeclarationException> { validator.underlying.validate(value).toSet() }
 
-            val cascadingValue = testclasses.WithCascadingSetAnnotation(emptyList())
+            val cascadingValue = TestClasses.WithCascadingSetAnnotation(emptyList())
             assertThrows<ConstraintDeclarationException> {
                 assertViolations(
                     obj = cascadingValue,
@@ -432,9 +436,9 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#works with @get meta annotation") {
-            val value = testclasses.WithMetaGetAnnotation("")
+            val value = TestClasses.WithMetaGetAnnotation("")
 
-            // getter field annotations should work
+            // getter field constraintDescriptors should work
             assertViolations(
                 obj = value,
                 withViolations = listOf(
@@ -442,9 +446,9 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "id",
                         "must not be empty",
                         "",
-                        testclasses.WithMetaGetAnnotation::class.java,
+                        TestClasses.WithMetaGetAnnotation::class.java,
                         value,
-                        getValidationAnnotations(testclasses.WithMetaGetAnnotation::class, "id").first()
+                        getValidationAnnotations(TestClasses.WithMetaGetAnnotation::class.java, "id").first()
                     )
                 )
             )
@@ -456,13 +460,13 @@ class DataClassValidatorTest : AssertViolationTest() {
             violation.message should be("must not be empty")
             violation.propertyPath.toString() should be("id")
             violation.invalidValue should be("")
-            violation.rootBeanClass should be(testclasses.WithMetaGetAnnotation::class.java)
+            violation.rootBeanClass should be(TestClasses.WithMetaGetAnnotation::class.java)
             violation.rootBean should be(value)
             violation.leafBean should be(value)
         }
 
         test("DataClassValidator#works with @field meta annotation") {
-            val value = testclasses.WithMetaFieldAnnotation("")
+            val value = TestClasses.WithMetaFieldAnnotation("")
 
             assertViolations(
                 obj = value,
@@ -471,9 +475,9 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "id",
                         "must not be empty",
                         "",
-                        testclasses.WithMetaFieldAnnotation::class.java,
+                        TestClasses.WithMetaFieldAnnotation::class.java,
                         value,
-                        getValidationAnnotations(testclasses.WithMetaFieldAnnotation::class, "id").first()
+                        getValidationAnnotations(TestClasses.WithMetaFieldAnnotation::class.java, "id").first()
                     )
                 )
             )
@@ -485,13 +489,13 @@ class DataClassValidatorTest : AssertViolationTest() {
             violation.message should be("must not be empty")
             violation.propertyPath.toString() should be("id")
             violation.invalidValue should be("")
-            violation.rootBeanClass should be(testclasses.WithMetaFieldAnnotation::class.java)
+            violation.rootBeanClass should be(TestClasses.WithMetaFieldAnnotation::class.java)
             violation.rootBean should be(value)
             violation.leafBean should be(value)
         }
 
         test("DataClassValidator#works with @field meta annotation 1") {
-            val value = testclasses.WithPartialMetaFieldAnnotation("")
+            val value = TestClasses.WithPartialMetaFieldAnnotation("")
 
             assertViolations(
                 obj = value,
@@ -500,56 +504,56 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "id",
                         "must not be empty",
                         "",
-                        testclasses.WithPartialMetaFieldAnnotation::class.java,
+                        TestClasses.WithPartialMetaFieldAnnotation::class.java,
                         value,
-                        getValidationAnnotations(testclasses.WithPartialMetaFieldAnnotation::class, "id").last()
+                        getValidationAnnotations(TestClasses.WithPartialMetaFieldAnnotation::class.java, "id").last()
                     ),
                     WithViolation(
                         "id",
                         "size must be between 2 and 10",
                         "",
-                        testclasses.WithPartialMetaFieldAnnotation::class.java,
+                        TestClasses.WithPartialMetaFieldAnnotation::class.java,
                         value,
-                        getValidationAnnotations(testclasses.WithPartialMetaFieldAnnotation::class, "id").first()
+                        getValidationAnnotations(TestClasses.WithPartialMetaFieldAnnotation::class.java, "id").first()
                     )
                 )
             )
         }
 
         test("DataClassValidator#validateValue 1") {
-            val violations = validator.validateValue(testclasses.OneOfListExample::class, "enumValue", listOf("g"))
+            val violations = validator.validateValue(TestClasses.OneOfListExample::class.java, "enumValue", listOf("g"))
             violations.size shouldBeEqual 1
             val violation = violations.first()
             violation.message should be("g not one of [a, B, c]")
             violation.propertyPath.toString() should be("enumValue")
             violation.invalidValue should be(listOf("g"))
-            violation.rootBeanClass should be(testclasses.OneOfListExample::class.java)
+            violation.rootBeanClass should be(TestClasses.OneOfListExample::class.java)
             violation.rootBean should beNull()
             violation.leafBean should beNull()
         }
 
         test("DataClassValidator#validateValue 2") {
-            val descriptor = validator.getConstraintsForClass(testclasses.OneOfListExample::class)
-            val violations = validator.validateValue(descriptor, "enumValue", listOf("g"))
+            val descriptor = validator.getConstraintsForClass(TestClasses.OneOfListExample::class.java)
+            val violations = validator.validateValue<TestClasses.OneOfListExample>(descriptor, "enumValue", listOf("g"))
             violations.size shouldBeEqual 1
             val violation = violations.first()
             violation.message should be("g not one of [a, B, c]")
             violation.propertyPath.toString() should be("enumValue")
             violation.invalidValue should be(listOf("g"))
-            violation.rootBeanClass should be(testclasses.OneOfListExample::class.java)
+            violation.rootBeanClass should be(TestClasses.OneOfListExample::class.java)
             violation.rootBean should beNull()
             violation.leafBean should beNull()
         }
 
         test("DataClassValidator#validateProperty 1") {
-            val value = testclasses.CustomerAccount("", null)
+            val value = TestClasses.CustomerAccount("", null)
             val violations = validator.validateProperty(value, "accountName")
             violations.size should be(1)
             val violation = violations.first()
             violation.message should be("must not be empty")
             violation.propertyPath.toString() should be("accountName")
             violation.invalidValue should be("")
-            violation.rootBeanClass should be(testclasses.CustomerAccount::class.java)
+            violation.rootBeanClass should be(TestClasses.CustomerAccount::class.java)
             violation.rootBean should be(value)
             violation.leafBean should be(value)
         }
@@ -557,12 +561,12 @@ class DataClassValidatorTest : AssertViolationTest() {
         test("DataClassValidator#validateProperty 2") {
             validator
                 .validateProperty(
-                    testclasses.MinIntExample(numberValue = 2),
+                    TestClasses.MinIntExample(numberValue = 2),
                     "numberValue"
                 ).isEmpty() should be(true)
-            assertViolations(obj = testclasses.MinIntExample(numberValue = 2))
+            assertViolations(obj = TestClasses.MinIntExample(numberValue = 2))
 
-            val invalid = testclasses.MinIntExample(numberValue = 0)
+            val invalid = TestClasses.MinIntExample(numberValue = 0)
             val violations = validator
                 .validateProperty(
                     invalid,
@@ -572,7 +576,7 @@ class DataClassValidatorTest : AssertViolationTest() {
             val violation = violations.first()
             violation.propertyPath.toString() should be("numberValue")
             violation.message should be("must be greater than or equal to 1")
-            violation.rootBeanClass should be(testclasses.MinIntExample::class.java)
+            violation.rootBeanClass should be(TestClasses.MinIntExample::class.java)
             violation.rootBean.javaClass.name should be(invalid.javaClass.name)
 
             assertViolations(
@@ -582,17 +586,17 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "numberValue",
                         "must be greater than or equal to 1",
                         0,
-                        testclasses.MinIntExample::class.java,
+                        TestClasses.MinIntExample::class.java,
                         invalid,
-                        getValidationAnnotations(testclasses.MinIntExample::class, "numberValue").first()
+                        getValidationAnnotations(TestClasses.MinIntExample::class.java, "numberValue").first()
                     )
                 )
             )
         }
 
         test("DataClassValidator#validateFieldValue") {
-            val constraints: Map<KClass<out Annotation>, Map<String, Any>> =
-                mapOf(jakarta.validation.constraints.Size::class to mapOf("min" to 5, "max" to 7))
+            val constraints: Map<Class<out Annotation>, Map<String, Any>> =
+                mapOf(jakarta.validation.constraints.Size::class.java to mapOf("min" to 5, "max" to 7))
 
             // size doesn't work for int types
             assertThrows<UnexpectedTypeException> {
@@ -637,12 +641,12 @@ class DataClassValidatorTest : AssertViolationTest() {
             violation2.rootBean should beNull()
             violation2.leafBean should beNull()
 
-            val constraintsWithGroup: Map<KClass<out Annotation>, Map<String, Any>> =
+            val constraintsWithGroup: Map<Class<out Annotation>, Map<String, Any>> =
                 mapOf(
-                    jakarta.validation.constraints.Size::class to mapOf(
+                    jakarta.validation.constraints.Size::class.java to mapOf(
                         "min" to 5,
                         "max" to 7,
-                        "groups" to arrayOf(testclasses.PersonCheck::class.java)
+                        "groups" to arrayOf(TestClasses.PersonCheck::class.java)
                     )
                 ) // groups MUST be an array type
 
@@ -655,7 +659,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                     constraintsWithGroup,
                     "seqIntField",
                     listOf(1, 2, 3),
-                    testclasses.PersonCheck::class
+                    TestClasses.PersonCheck::class.java
                 )
             violationsWithGroup.size should be(1)
             val violationWg = violationsWithGroup.first()
@@ -679,7 +683,7 @@ class DataClassValidatorTest : AssertViolationTest() {
 
             validator
                 .validateFieldValue(
-                    constraints = mapOf(jakarta.validation.constraints.NotEmpty::class to emptyMap()),
+                    constraints = mapOf(jakarta.validation.constraints.NotEmpty::class.java to emptyMap()),
                     fieldName = "data",
                     value = "Hello, world"
                 ).isEmpty() should be(true)
@@ -687,41 +691,41 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#groups support") {
             // see: https://docs.jboss.org/hibernate/stable/dataClassValidator/reference/en-US/html_single/#chapter-groups
-            val toTest = testclasses.WithPersonCheck("", "Jane Doe")
+            val toTest = TestClasses.WithPersonCheck("", "Jane Doe")
             // PersonCheck group not enabled, no violations
             assertViolations(obj = toTest)
             // Completely diff group enabled, no violations
-            validator.validate(obj = toTest, testclasses.OtherCheck::class)
+            validator.validate(obj = toTest, TestClasses.OtherCheck::class.java)
             // PersonCheck group enabled
             assertViolations(
                 obj = toTest,
-                groups = listOf(testclasses.PersonCheck::class),
+                groups = listOf(TestClasses.PersonCheck::class.java),
                 withViolations = listOf(
-                    WithViolation("id", "must not be empty", "", testclasses.WithPersonCheck::class.java, toTest)
+                    WithViolation("id", "must not be empty", "", TestClasses.WithPersonCheck::class.java, toTest)
                 )
             )
 
             // multiple groups with PersonCheck group enabled
             assertViolations(
                 obj = toTest,
-                groups = listOf(testclasses.OtherCheck::class, testclasses.PersonCheck::class),
+                groups = listOf(TestClasses.OtherCheck::class.java, TestClasses.PersonCheck::class.java),
                 withViolations = listOf(
-                    WithViolation("id", "must not be empty", "", testclasses.WithPersonCheck::class.java, toTest)
+                    WithViolation("id", "must not be empty", "", TestClasses.WithPersonCheck::class.java, toTest)
                 )
             )
         }
 
-        test("DataClassValidator#isCascaded method validation - defined fields") {
-            // nested method validation fields
-            val owner = testclasses.Person(id = "", name = "A. Einstein", address = DefaultAddress)
-            val beetleOwners = listOf(testclasses.Person(id = "9999", name = "", address = DefaultAddress))
+        test("DataClassValidator#isCascaded post construct validation - defined fields") {
+            // nested post construct validation fields
+            val owner = TestClasses.Person(id = "", name = "A. Einstein", address = DefaultAddress)
+            val beetleOwners = listOf(TestClasses.Person(id = "9999", name = "", address = DefaultAddress))
             val beetlePassengers =
-                listOf(testclasses.Person(id = "1001", name = "R. Franklin", address = DefaultAddress))
+                listOf(TestClasses.Person(id = "1001", name = "R. Franklin", address = DefaultAddress))
             val beetleOwnershipStart = LocalDate.now()
             val beetleOwnershipEnd = beetleOwnershipStart.plusYears(10)
             val beetleWarrantyEnd = beetleOwnershipStart.plusYears(3)
             val vwCarMake = CarMake.Volkswagen
-            val car = testclasses.Car(
+            val car = TestClasses.Car(
                 id = 1234,
                 make = vwCarMake,
                 model = "Beetle",
@@ -736,13 +740,13 @@ class DataClassValidatorTest : AssertViolationTest() {
                 warrantyEnd = beetleWarrantyEnd,
                 passengers = beetlePassengers
             )
-            val driver = testclasses.Driver(
+            val driver = TestClasses.Driver(
                 person = owner,
                 car = car
             )
 
             // no PersonCheck -- doesn't fail
-            assertViolations(obj = driver, groups = listOf(testclasses.PersonCheck::class))
+            assertViolations(obj = driver, groups = listOf(TestClasses.PersonCheck::class.java))
             // with default group - fail
             assertViolations(
                 obj = driver,
@@ -751,37 +755,37 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "car.owners[0].name",
                         "must not be empty",
                         "",
-                        testclasses.Driver::class.java,
+                        TestClasses.Driver::class.java,
                         driver
                     ),
-                    WithViolation("car.validateId", "id may not be even", car, testclasses.Driver::class.java, driver),
+                    WithViolation("car.validateId", "id may not be even", car, TestClasses.Driver::class.java, driver),
                     WithViolation(
                         "car.warrantyTimeValid.warrantyEnd",
                         "both warrantyStart and warrantyEnd are required for a valid range",
-                        car,
-                        testclasses.Driver::class.java,
+                        beetleWarrantyEnd,
+                        TestClasses.Driver::class.java,
                         driver
                     ),
                     WithViolation(
                         "car.warrantyTimeValid.warrantyStart",
                         "both warrantyStart and warrantyEnd are required for a valid range",
-                        car,
-                        testclasses.Driver::class.java,
+                        null,
+                        TestClasses.Driver::class.java,
                         driver
                     ),
                     WithViolation(
                         "car.year",
                         "must be greater than or equal to 2000",
                         1970,
-                        testclasses.Driver::class.java,
+                        TestClasses.Driver::class.java,
                         driver
                     ),
-                    WithViolation("person.id", "must not be empty", "", testclasses.Driver::class.java, driver)
+                    WithViolation("person.id", "must not be empty", "", TestClasses.Driver::class.java, driver)
                 )
             )
 
             // Validation with the default group does not return any violations with the standard
-            // Hibernate Validator because the constraint annotations of the data class are by default
+            // Hibernate Validator because the constraint constraintDescriptors of the data class are by default
             // only on the constructor unless specified with the @field:Annotation meta annotation which
             // would apply the annotation to the property's backing field instead of just its getter
             // method.
@@ -791,12 +795,12 @@ class DataClassValidatorTest : AssertViolationTest() {
                 .validate(driver)
                 .isEmpty() should be(true)
 
-            val carWithInvalidNumberOfPassengers = testclasses.Car(
+            val carWithInvalidNumberOfPassengers = TestClasses.Car(
                 id = 1235,
                 make = CarMake.Audi,
                 model = "A4",
                 year = 2010,
-                owners = listOf(testclasses.Person(id = "9999", name = "M Bailey", address = DefaultAddress)),
+                owners = listOf(TestClasses.Person(id = "9999", name = "M Bailey", address = DefaultAddress)),
                 licensePlate = "CA123",
                 numDoors = 2,
                 manual = true,
@@ -806,8 +810,8 @@ class DataClassValidatorTest : AssertViolationTest() {
                 warrantyEnd = LocalDate.now().plusYears(3),
                 passengers = emptyList()
             )
-            val anotherDriver = testclasses.Driver(
-                person = testclasses.Person(id = "55555", name = "K. Brown", address = DefaultAddress),
+            val anotherDriver = TestClasses.Driver(
+                person = TestClasses.Person(id = "55555", name = "K. Brown", address = DefaultAddress),
                 car = carWithInvalidNumberOfPassengers
             )
 
@@ -819,50 +823,51 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "car",
                         "number of passenger(s) is not valid",
                         carWithInvalidNumberOfPassengers,
-                        testclasses.Driver::class.java,
+                        TestClasses.Driver::class.java,
                         anotherDriver
                     )
                 )
             )
         }
 
-        test("DataClassValidator#class-level annotations") {
+        test("DataClassValidator#class-level constraintDescriptors") {
             // The Car data class is annotated with @ValidPassengerCount which checks if the number of
             // passengers is greater than zero and less then some max specified in the annotation.
             // In this test, no passengers are defined so the validation fails the class-level constraint.
-            val car = testclasses.Car(
+            val warrantyEnd = LocalDate.now().plusYears(3)
+            val car = TestClasses.Car(
                 id = 1234,
                 make = CarMake.Volkswagen,
                 model = "Beetle",
                 year = 2004,
-                owners = listOf(testclasses.Person(id = "9999", name = "K. Ann", address = DefaultAddress)),
+                owners = listOf(TestClasses.Person(id = "9999", name = "K. Ann", address = DefaultAddress)),
                 licensePlate = "CA123",
                 numDoors = 2,
                 manual = true,
                 ownershipStart = LocalDate.now(),
                 ownershipEnd = LocalDate.now().plusYears(10),
                 warrantyStart = null,
-                warrantyEnd = LocalDate.now().plusYears(3),
+                warrantyEnd = warrantyEnd,
                 passengers = emptyList()
             )
 
             assertViolations(
                 obj = car,
                 withViolations = listOf(
-                    WithViolation("", "number of passenger(s) is not valid", car, testclasses.Car::class.java, car),
-                    WithViolation("validateId", "id may not be even", car, testclasses.Car::class.java, car),
+                    WithViolation("", "number of passenger(s) is not valid", car, TestClasses.Car::class.java, car),
+                    WithViolation("validateId", "id may not be even", car, TestClasses.Car::class.java, car),
                     WithViolation(
                         "warrantyTimeValid.warrantyEnd",
                         "both warrantyStart and warrantyEnd are required for a valid range",
-                        car,
-                        testclasses.Car::class.java,
+                        warrantyEnd,
+                        TestClasses.Car::class.java,
                         car
                     ),
                     WithViolation(
                         "warrantyTimeValid.warrantyStart",
                         "both warrantyStart and warrantyEnd are required for a valid range",
-                        car,
-                        testclasses.Car::class.java,
+                        null,
+                        TestClasses.Car::class.java,
                         car
                     )
                 )
@@ -874,14 +879,14 @@ class DataClassValidatorTest : AssertViolationTest() {
             val violation = fromUnderlyingViolations.first()
             violation.propertyPath.toString() should be("")
             violation.message should be("number of passenger(s) is not valid")
-            violation.rootBeanClass should be(testclasses.Car::class.java)
+            violation.rootBeanClass should be(TestClasses.Car::class.java)
             violation.invalidValue should be(car)
             violation.rootBean should be(car)
 
             // Validation with the default group does not return any violations with the standard
-            // Hibernate Validator because the constraint annotations of the data class are by default
+            // Hibernate Validator because the constraint constraintDescriptors of the data class are by default
             // only on the constructor unless specified with the @field:Annotation meta annotation.
-            // However, class-level annotations will work with the standard Hibernate Validator.
+            // However, class-level constraintDescriptors will work with the standard Hibernate Validator.
             val configuration = Validation
                 .byDefaultProvider()
                 .configure() as HibernateValidatorConfiguration
@@ -898,22 +903,22 @@ class DataClassValidatorTest : AssertViolationTest() {
             val classLevelConstraintViolation = hibernateViolations.first()
             classLevelConstraintViolation.propertyPath.toString() should be("")
             classLevelConstraintViolation.message should be("number of passenger(s) is not valid")
-            classLevelConstraintViolation.rootBeanClass should be(testclasses.Car::class.java)
+            classLevelConstraintViolation.rootBeanClass should be(TestClasses.Car::class.java)
             classLevelConstraintViolation.rootBean should be(car)
         }
 
         test("DataClassValidator#cascaded validations") {
-            val validUser = testclasses.User("1234567", "ion", "Other")
-            val invalidUser = testclasses.User("", "anion", "M")
-            val nestedValidUser = testclasses.Users(listOf(validUser))
-            val nestedInvalidUser = testclasses.Users(listOf(invalidUser))
-            val nestedDuplicateUser = testclasses.Users(listOf(validUser, validUser))
+            val validUser = TestClasses.User("1234567", "ion", "Other")
+            val invalidUser = TestClasses.User("", "anion", "M")
+            val nestedValidUser = TestClasses.Users(listOf(validUser))
+            val nestedInvalidUser = TestClasses.Users(listOf(invalidUser))
+            val nestedDuplicateUser = TestClasses.Users(listOf(validUser, validUser))
 
             assertViolations(obj = validUser)
             assertViolations(
                 obj = invalidUser,
                 withViolations = listOf(
-                    WithViolation("id", "must not be empty", "", testclasses.User::class.java, invalidUser)
+                    WithViolation("id", "must not be empty", "", TestClasses.User::class.java, invalidUser)
                 )
             )
 
@@ -925,7 +930,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "users[0].id",
                         "must not be empty",
                         "",
-                        testclasses.Users::class.java,
+                        TestClasses.Users::class.java,
                         nestedInvalidUser
                     )
                 )
@@ -945,18 +950,18 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#validate is valid") {
-            val testUser = testclasses.User(id = "9999", name = "April", gender = "F")
+            val testUser = TestClasses.User(id = "9999", name = "April", gender = "F")
             validator.validate(testUser).isEmpty() should be(true)
         }
 
         test("DataClassValidator#validate returns valid result even when data class has other fields") {
-            val testPerson = testclasses.Person(id = "9999", name = "April", address = DefaultAddress)
+            val testPerson = TestClasses.Person(id = "9999", name = "April", address = DefaultAddress)
             validator.validate(testPerson).isEmpty() should be(true)
         }
 
         test("DataClassValidator#validate is invalid") {
-            val testUser = testclasses.User(id = "", name = "April", gender = "F")
-            val fieldAnnotation = getValidationAnnotations(testclasses.User::class, "id").first()
+            val testUser = TestClasses.User(id = "", name = "April", gender = "F")
+            val fieldAnnotation = getValidationAnnotations(TestClasses.User::class.java, "id").first()
 
             assertViolations(
                 obj = testUser,
@@ -965,7 +970,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "id",
                         "must not be empty",
                         "",
-                        testclasses.User::class.java,
+                        TestClasses.User::class.java,
                         testUser,
                         fieldAnnotation
                     )
@@ -974,13 +979,14 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test(
-            "DataClassValidator#validate returns invalid result of both field validations and method validations"
+            "DataClassValidator#validate returns invalid result of both field validations and post construct validations"
         ) {
-            val testUser = testclasses.User(id = "", name = "", gender = "Female")
+            val testUser = TestClasses.User(id = "", name = "", gender = "Female")
 
-            val idAnnotation: Annotation = getValidationAnnotations(testclasses.User::class, "id").first()
-            val genderAnnotation: Annotation = getValidationAnnotations(testclasses.User::class, "gender").first()
-            val methodAnnotation: Annotation = getValidationAnnotations(testclasses.User::class, "nameCheck").first()
+            val idAnnotation: Annotation = getValidationAnnotations(TestClasses.User::class.java, "id").first()
+            val genderAnnotation: Annotation = getValidationAnnotations(TestClasses.User::class.java, "gender").first()
+            val methodAnnotation: Annotation =
+                getValidationAnnotations(TestClasses.User::class.java, "nameCheck").first()
 
             assertViolations(
                 obj = testUser,
@@ -989,16 +995,16 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "gender",
                         "Female not one of [F, M, Other]",
                         "Female",
-                        testclasses.User::class.java,
+                        TestClasses.User::class.java,
                         testUser,
                         genderAnnotation
                     ),
-                    WithViolation("id", "must not be empty", "", testclasses.User::class.java, testUser, idAnnotation),
+                    WithViolation("id", "must not be empty", "", TestClasses.User::class.java, testUser, idAnnotation),
                     WithViolation(
                         "nameCheck.name",
                         "cannot be empty",
-                        testUser,
-                        testclasses.User::class.java,
+                        "",
+                        TestClasses.User::class.java,
                         testUser,
                         methodAnnotation
                     )
@@ -1007,9 +1013,9 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#should register the user defined constraint validator") {
-            val testState = testclasses.StateValidationExample(state = "NY")
+            val testState = TestClasses.StateValidationExample(state = "NY")
             val fieldAnnotation: Annotation =
-                getValidationAnnotations(testclasses.StateValidationExample::class, "state").first()
+                getValidationAnnotations(TestClasses.StateValidationExample::class.java, "state").first()
 
             assertViolations(
                 obj = testState,
@@ -1018,7 +1024,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "state",
                         "Please register with state CA",
                         "NY",
-                        testclasses.StateValidationExample::class.java,
+                        TestClasses.StateValidationExample::class.java,
                         testState,
                         fieldAnnotation
                     )
@@ -1028,51 +1034,51 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#secondary data class constructors") {
             // the framework does not validate on construction, however, it must use
-            // the data class executable for finding the field validation annotations.
+            // the data class executable for finding the field validation constraintDescriptors.
             // Validations only apply to executable parameters that are also class fields,
             // e.g., from the primary executable.
-            assertViolations(obj = testclasses.TestJsonCreator("42"))
-            assertViolations(obj = testclasses.TestJsonCreator(42))
-            assertViolations(obj = testclasses.TestJsonCreator2(listOf("1", "2", "3")))
+            assertViolations(obj = TestClasses.TestJsonCreator("42"))
+            assertViolations(obj = TestClasses.TestJsonCreator(42))
+            assertViolations(obj = TestClasses.TestJsonCreator2(listOf("1", "2", "3")))
             assertViolations(
-                obj = testclasses.TestJsonCreator2(listOf(1, 2, 3), default = "Goodbye, world")
+                obj = TestClasses.TestJsonCreator2(listOf(1, 2, 3), default = "Goodbye, world")
             )
 
-            assertViolations(obj = testclasses.TestJsonCreatorWithValidation("42"))
+            assertViolations(obj = TestClasses.TestJsonCreatorWithValidation("42"))
             assertThrows<NumberFormatException> {
                 // can't validate after the fact -- the instance is already constructed, then we validate
-                assertViolations(obj = testclasses.TestJsonCreatorWithValidation(""))
+                assertViolations(obj = TestClasses.TestJsonCreatorWithValidation(""))
             }
-            assertViolations(obj = testclasses.TestJsonCreatorWithValidation(42))
+            assertViolations(obj = TestClasses.TestJsonCreatorWithValidation(42))
 
-            // annotations are on primary executable
+            // constraintDescriptors are on primary executable
             assertViolations(
-                obj = testclasses.TestJsonCreatorWithValidations("99"),
+                obj = TestClasses.TestJsonCreatorWithValidations("99"),
                 withViolations = listOf(
                     WithViolation(
                         "int",
                         "99 not one of [42, 137]",
                         99,
-                        testclasses.TestJsonCreatorWithValidations::class.java,
-                        testclasses.TestJsonCreatorWithValidations("99")
+                        TestClasses.TestJsonCreatorWithValidations::class.java,
+                        TestClasses.TestJsonCreatorWithValidations("99")
                     )
                 )
             )
-            assertViolations(obj = testclasses.TestJsonCreatorWithValidations(42))
+            assertViolations(obj = TestClasses.TestJsonCreatorWithValidations(42))
 
-            assertViolations(obj = testclasses.DataClassWithMultipleConstructors("10001", "20002", "30003"))
-            assertViolations(obj = testclasses.DataClassWithMultipleConstructors(10001L, 20002L, 30003L))
+            assertViolations(obj = TestClasses.DataClassWithMultipleConstructors("10001", "20002", "30003"))
+            assertViolations(obj = TestClasses.DataClassWithMultipleConstructors(10001L, 20002L, 30003L))
 
-            assertViolations(obj = testclasses.DataClassWithMultipleConstructorsAnnotated(10001L, 20002L, 30003L))
+            assertViolations(obj = TestClasses.DataClassWithMultipleConstructorsAnnotated(10001L, 20002L, 30003L))
             assertViolations(
                 obj =
-                testclasses.DataClassWithMultipleConstructorsAnnotated(
+                TestClasses.DataClassWithMultipleConstructorsAnnotated(
                     "10001", "20002", "30003"
                 )
             )
 
             assertViolations(
-                obj = testclasses.DataClassWithMultipleConstructorsAnnotatedAndValidations(
+                obj = TestClasses.DataClassWithMultipleConstructorsAnnotatedAndValidations(
                     10001L,
                     20002L,
                     UUID.randomUUID().toString()
@@ -1080,14 +1086,14 @@ class DataClassValidatorTest : AssertViolationTest() {
             )
 
             assertViolations(
-                obj = testclasses.DataClassWithMultipleConstructorsAnnotatedAndValidations(
+                obj = TestClasses.DataClassWithMultipleConstructorsAnnotatedAndValidations(
                     "10001",
                     "20002",
                     UUID.randomUUID().toString()
                 )
             )
 
-            val invalid = testclasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations(
+            val invalid = TestClasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations(
                 "9999",
                 "10001",
                 UUID.randomUUID().toString()
@@ -1099,23 +1105,23 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "number1",
                         "must be greater than or equal to 10000",
                         9999,
-                        testclasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class.java,
+                        TestClasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class.java,
                         invalid
                     )
                 )
             )
 
-            val d = testclasses.InvalidDoublePerson("Andrea") { "" }
+            val d = TestClasses.InvalidDoublePerson("Andrea") { "" }
             assertViolations(d)
             // underlying also ignores function arguments
             validator.underlying.validate(d).size should be(0)
-            val d2 = testclasses.DoublePerson("Andrea") { "" }
+            val d2 = TestClasses.DoublePerson("Andrea") { "" }
             assertViolations(d2)
             // underlying also ignores function arguments
             validator.underlying.validate(d2).size should be(0)
 
-            // verification fails here because of the method validation
-            val d3 = testclasses.ValidDoublePerson("Andrea") { "" }
+            // verification fails here because of the post construct validation
+            val d3 = TestClasses.ValidDoublePerson("Andrea") { "" }
             val ve = assertThrows<ValidationException> {
                 validator.verify(d3)
             }
@@ -1129,12 +1135,12 @@ class DataClassValidatorTest : AssertViolationTest() {
             // underlying still ignores function arguments
             validator.underlying.validate(d3).size should be(0)
 
-            val d4 = testclasses.PossiblyValidDoublePerson("Andrea") { "" }
+            val d4 = TestClasses.PossiblyValidDoublePerson("Andrea") { "" }
             assertViolations(d4)
             // underlying also ignores function arguments
             validator.underlying.validate(d4).size should be(0)
 
-            val d5 = testclasses.WithFinalValField(
+            val d5 = TestClasses.WithFinalValField(
                 UUID.randomUUID().toString(),
                 "Joan",
                 "Jett",
@@ -1144,17 +1150,17 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#cycles") {
-            validator.validate(testclasses.A("5678", testclasses.B("9876", testclasses.C("444", null))))
+            validator.validate(TestClasses.A("5678", TestClasses.B("9876", TestClasses.C("444", null))))
                 .isEmpty() should be(true)
-            validator.validate(testclasses.D("1", testclasses.E("2", testclasses.F("3", null)))).isEmpty() should be(
+            validator.validate(TestClasses.D("1", TestClasses.E("2", TestClasses.F("3", null)))).isEmpty() should be(
                 true
             )
-            validator.validate(testclasses.G("1", testclasses.H("2", testclasses.I("3", emptyList()))))
+            validator.validate(TestClasses.G("1", TestClasses.H("2", TestClasses.I("3", emptyList()))))
                 .isEmpty() should be(true)
         }
 
         test("DataClassValidator#java BeanProperty") {
-            val value = testclasses.AnnotatedBeanProperties(3)
+            val value = TestClasses.AnnotatedBeanProperties(3)
             value.field1 = ""
             assertViolations(
                 obj = value,
@@ -1163,7 +1169,7 @@ class DataClassValidatorTest : AssertViolationTest() {
                         "field1",
                         "must not be empty",
                         "",
-                        testclasses.AnnotatedBeanProperties::class.java,
+                        TestClasses.AnnotatedBeanProperties::class.java,
                         value
                     )
                 )
@@ -1171,19 +1177,19 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#data class with no executable params") {
-            val value = testclasses.NoConstructorParams(null)
+            val value = TestClasses.NoConstructorParams(null)
             value.id = "1234"
             assertViolations(value)
 
             assertViolations(
-                obj = testclasses.NoConstructorParams(null),
+                obj = TestClasses.NoConstructorParams(null),
                 withViolations = listOf(
                     WithViolation(
                         "id",
                         "must not be empty",
                         "",
-                        testclasses.NoConstructorParams::class.java,
-                        testclasses.NoConstructorParams(null)
+                        TestClasses.NoConstructorParams::class.java,
+                        TestClasses.NoConstructorParams(null)
                     )
                 )
             )
@@ -1191,109 +1197,109 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#data class annotated non executable field") {
             assertViolations(
-                obj = testclasses.AnnotatedInternalFields("1234", "thisisabigstring"),
+                obj = TestClasses.AnnotatedInternalFields("1234", "thisisabigstring"),
                 withViolations = listOf(
                     WithViolation(
                         "company",
                         "must not be empty",
                         "",
-                        testclasses.AnnotatedInternalFields::class.java,
-                        testclasses.AnnotatedInternalFields("1234", "thisisabigstring")
+                        TestClasses.AnnotatedInternalFields::class.java,
+                        TestClasses.AnnotatedInternalFields("1234", "thisisabigstring")
                     )
                 )
             )
         }
 
-        test("DataClassValidator#inherited validation annotations") {
+        test("DataClassValidator#inherited validation constraintDescriptors") {
             assertViolations(
-                obj = testclasses.ImplementsAncestor(""),
+                obj = TestClasses.ImplementsAncestor(""),
                 withViolations = listOf(
                     WithViolation(
                         "field1",
                         "must not be empty",
                         "",
-                        testclasses.ImplementsAncestor::class.java,
-                        testclasses.ImplementsAncestor("")
+                        TestClasses.ImplementsAncestor::class.java,
+                        TestClasses.ImplementsAncestor("")
                     ),
                     WithViolation(
                         "validateField1.field1",
                         "not a double value",
-                        testclasses.ImplementsAncestor(""),
-                        testclasses.ImplementsAncestor::class.java,
-                        testclasses.ImplementsAncestor("")
+                        "",
+                        TestClasses.ImplementsAncestor::class.java,
+                        TestClasses.ImplementsAncestor("")
                     )
                 )
             )
 
             assertViolations(
-                obj = testclasses.ImplementsAncestor("blimey"),
+                obj = TestClasses.ImplementsAncestor("blimey"),
                 withViolations = listOf(
                     WithViolation(
                         "validateField1.field1",
                         "not a double value",
-                        testclasses.ImplementsAncestor("blimey"),
-                        testclasses.ImplementsAncestor::class.java,
-                        testclasses.ImplementsAncestor("blimey")
+                        "blimey",
+                        TestClasses.ImplementsAncestor::class.java,
+                        TestClasses.ImplementsAncestor("blimey")
                     )
                 )
             )
 
-            assertViolations(obj = testclasses.ImplementsAncestor("3.141592653589793d"))
+            assertViolations(obj = TestClasses.ImplementsAncestor("3.141592653589793d"))
         }
 
         test("DataClassValidator#getConstraintsForClass") {
             // there is no resolution of nested types in a description
-            val driverDataClassDescriptor = validator.getConstraintsForClass(testclasses.Driver::class)
-            driverDataClassDescriptor.members.size should be(2)
+            val driverDataClassDescriptor = validator.getConstraintsForClass(TestClasses.Driver::class.java)
+            driverDataClassDescriptor.constrainedProperties.size should be(2)
 
             verifyDriverClassDescriptor(driverDataClassDescriptor)
         }
 
-        test("DataClassValidator#annotations") {
-            val dataClassDescriptor = validator.descriptorFactory.describe(testclasses.TestAnnotations::class)
-            dataClassDescriptor.members.size should be(1)
-            val (name, memberDescriptor) = dataClassDescriptor.members.entries.first()
-            name should be("cars")
-            memberDescriptor.isInstanceOf<PropertyDescriptor>() should be(true)
-            memberDescriptor.annotations.size should be(1)
-            memberDescriptor.annotations.first().annotationClass should be(NotEmpty::class)
+        test("DataClassValidator#constraintDescriptors") {
+            val dataClassDescriptor = validator.descriptorFactory.describe(TestClasses.TestAnnotations::class.java)
+            dataClassDescriptor.constrainedProperties.size should be(1)
+            val propertyDescriptor = dataClassDescriptor.constrainedProperties.first()
+            propertyDescriptor.propertyName should be("cars")
+            propertyDescriptor.isInstanceOf<PropertyDescriptor>() should be(true)
+            propertyDescriptor.constraintDescriptors.size should be(1)
+            propertyDescriptor.constraintDescriptors.first().annotation.annotationClass should be(NotEmpty::class)
         }
 
         test("DataClassValidator#generics 1") {
             val dataClassDescriptor =
-                validator.descriptorFactory.describe(testclasses.GenericTestDataClass::class)
-            dataClassDescriptor.members.size should be(1)
-            val value = testclasses.GenericTestDataClass(data = "Hello, World")
+                validator.descriptorFactory.describe(TestClasses.GenericTestDataClass::class.java)
+            dataClassDescriptor.constrainedProperties.size should be(1)
+            val value = TestClasses.GenericTestDataClass(data = "Hello, World")
             val results = validator.validate(value)
             results.isEmpty() should be(true)
 
             assertThrows<UnexpectedTypeException> {
-                validator.validate(testclasses.GenericTestDataClass(3))
+                validator.validate(TestClasses.GenericTestDataClass(3))
             }
 
-            val genericValue = testclasses.GenericTestDataClass(emptyList<String>())
+            val genericValue = TestClasses.GenericTestDataClass(emptyList<String>())
             val violations = validator.validate(genericValue)
             violations.size should be(1)
             val violation = violations.first()
             violation.message should be("must not be empty")
             violation.propertyPath.toString() should be("data")
-            violation.rootBeanClass should be(testclasses.GenericTestDataClass::class.java)
+            violation.rootBeanClass should be(TestClasses.GenericTestDataClass::class.java)
             violation.leafBean should be(genericValue)
             violation.invalidValue should be(emptyList<String>())
 
-            validator.validate(testclasses.GenericMinTestDataClass(5)).isEmpty() should be(true)
+            validator.validate(TestClasses.GenericMinTestDataClass(5)).isEmpty() should be(true)
 
             val dataClassDescriptor1 =
-                validator.descriptorFactory.describe(testclasses.GenericTestDataClassMultipleTypes::class)
-            dataClassDescriptor1.members.size should be(3)
+                validator.descriptorFactory.describe(TestClasses.GenericTestDataClassMultipleTypes::class.java)
+            dataClassDescriptor1.constrainedProperties.size should be(3)
 
-            val value1 = testclasses.GenericTestDataClassMultipleTypes(
+            val value1 = TestClasses.GenericTestDataClassMultipleTypes(
                 data = null,
                 things = listOf(1, 2, 3),
                 otherThings = listOf(
-                    testclasses.UUIDExample("1234"),
-                    testclasses.UUIDExample(UUID.randomUUID().toString()),
-                    testclasses.UUIDExample(UUID.randomUUID().toString())
+                    TestClasses.UUIDExample("1234"),
+                    TestClasses.UUIDExample(UUID.randomUUID().toString()),
+                    TestClasses.UUIDExample(UUID.randomUUID().toString())
                 )
             )
             val results1 = validator.validate(value1)
@@ -1301,10 +1307,10 @@ class DataClassValidatorTest : AssertViolationTest() {
         }
 
         test("DataClassValidator#generics 2") {
-            val value: testclasses.Page<testclasses.Person> = testclasses.Page(
+            val value: TestClasses.Page<TestClasses.Person> = TestClasses.Page(
                 listOf(
-                    testclasses.Person(id = "9999", name = "April", address = DefaultAddress),
-                    testclasses.Person(id = "9999", name = "April", address = DefaultAddress)
+                    TestClasses.Person(id = "9999", name = "April", address = DefaultAddress),
+                    TestClasses.Person(id = "9999", name = "April", address = DefaultAddress)
                 ),
                 0,
                 null,
@@ -1312,8 +1318,8 @@ class DataClassValidatorTest : AssertViolationTest() {
             )
 
             val dataClassDescriptor =
-                validator.descriptorFactory.describe(testclasses.Page::class)
-            dataClassDescriptor.members.size should be(4)
+                validator.descriptorFactory.describe(TestClasses.Page::class.java)
+            dataClassDescriptor.constrainedProperties.size should be(1)
 
             val violations = validator.validate(value)
             violations.size should be(1)
@@ -1321,7 +1327,7 @@ class DataClassValidatorTest : AssertViolationTest() {
             val violation = violations.first()
             violation.propertyPath.toString() should be("pageSize")
             violation.message should be("must be greater than or equal to 1")
-            violation.rootBeanClass should be(testclasses.Page::class.java)
+            violation.rootBeanClass should be(TestClasses.Page::class.java)
             violation.rootBean should be(value)
             violation.invalidValue should be(0)
         }
@@ -1329,7 +1335,7 @@ class DataClassValidatorTest : AssertViolationTest() {
         test("DataClassValidator#test boxed primitives") {
             validator
                 .validateValue(
-                    testclasses.DataClassWithBoxedPrimitives::class,
+                    TestClasses.DataClassWithBoxedPrimitives::class.java,
                     "events",
                     Integer.valueOf(42)
                 ).isEmpty() should be(true)
@@ -1337,7 +1343,7 @@ class DataClassValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#find executable 1") {
             /* DataClassWithMultipleConstructorsAnnotatedAndValidations */
-            val kClazz = testclasses.DataClassWithMultipleConstructorsAnnotatedAndValidations::class
+            val kClazz = TestClasses.DataClassWithMultipleConstructorsAnnotatedAndValidations::class
 
             // by default this will find listOf(Long, Long, String)
             val constructorParameterTypes = kClazz.primaryConstructor!!.parameters.map { it.type.javaType }
@@ -1346,21 +1352,15 @@ class DataClassValidatorTest : AssertViolationTest() {
             constructorParameterTypes[1] should be(Long::class.javaPrimitiveType)
             constructorParameterTypes[2] should be(String::class.java)
 
-            val dataClazzDescriptor = validator.getConstraintsForClass(
-                testclasses.DataClassWithMultipleConstructorsAnnotatedAndValidations::class
+            val descriptor = validator.getConstraintsForClass(
+                TestClasses.DataClassWithMultipleConstructorsAnnotatedAndValidations::class.java
             )
-            dataClazzDescriptor.members.size should be(3)
-            dataClazzDescriptor.members.contains("number1") should be(true)
-            dataClazzDescriptor.members["number1"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("number2") should be(true)
-            dataClazzDescriptor.members["number2"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("uuid") should be(true)
-            dataClazzDescriptor.members["uuid"]!!.annotations.isEmpty() should be(true)
+            descriptor.constrainedProperties.size should be(0) // no constrained constructors
         }
 
         test("DataClassValidator#find executable 2") {
             /* DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations */
-            val kClazz = testclasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class
+            val kClazz = TestClasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class
 
             // by default this will find listOf(Long, Long, String)
             val constructorParameterTypes = kClazz.primaryConstructor!!.parameters.map { it.type.javaType }
@@ -1369,21 +1369,18 @@ class DataClassValidatorTest : AssertViolationTest() {
             constructorParameterTypes[1] should be(Long::class.javaPrimitiveType)
             constructorParameterTypes[2] should be(String::class.java)
 
-            val dataClazzDescriptor = validator.getConstraintsForClass(
-                testclasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class
+            val descriptor = validator.getConstraintsForClass(
+                TestClasses.DataClassWithMultipleConstructorsPrimaryAnnotatedAndValidations::class.java
             )
-            dataClazzDescriptor.members.size should be(3)
-            dataClazzDescriptor.members.contains("number1") should be(true)
-            dataClazzDescriptor.members["number1"]!!.annotations.size should be(1)
-            dataClazzDescriptor.members.contains("number2") should be(true)
-            dataClazzDescriptor.members["number2"]!!.annotations.size should be(1)
-            dataClazzDescriptor.members.contains("uuid") should be(true)
-            dataClazzDescriptor.members["uuid"]!!.annotations.size should be(1)
+            descriptor.constrainedProperties.size should be(3)
+            descriptor.getConstraintsForProperty("number1").constraintDescriptors.size should be(1)
+            descriptor.getConstraintsForProperty("number2").constraintDescriptors.size should be(1)
+            descriptor.getConstraintsForProperty("uuid").constraintDescriptors.size should be(1)
         }
 
         test("DataClassValidator#find executable 3") {
             /* DataClassWithMultipleConstructorsAnnotated */
-            val kClazz = testclasses.DataClassWithMultipleConstructorsAnnotated::class
+            val kClazz = TestClasses.DataClassWithMultipleConstructorsAnnotated::class
 
             // this should find listOf(Long, Long, Long)
             val constructorParameterTypes = kClazz.primaryConstructor!!.parameters.map { it.type.javaType }
@@ -1392,20 +1389,14 @@ class DataClassValidatorTest : AssertViolationTest() {
             constructorParameterTypes[1] should be(Long::class.javaPrimitiveType)
             constructorParameterTypes[2] should be(Long::class.javaPrimitiveType)
 
-            val dataClazzDescriptor =
-                validator.getConstraintsForClass(testclasses.DataClassWithMultipleConstructorsAnnotated::class)
-            dataClazzDescriptor.members.size should be(3)
-            dataClazzDescriptor.members.contains("number1") should be(true)
-            dataClazzDescriptor.members["number1"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("number2") should be(true)
-            dataClazzDescriptor.members["number2"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("number3") should be(true)
-            dataClazzDescriptor.members["number3"]!!.annotations.isEmpty() should be(true)
+            val descriptor =
+                validator.getConstraintsForClass(TestClasses.DataClassWithMultipleConstructorsAnnotated::class.java)
+            descriptor.constrainedProperties.size should be(0) // no constrained constructors
         }
 
         test("DataClassValidator#find executable 4") {
             /* DataClassWithMultipleConstructors */
-            val kClazz = testclasses.DataClassWithMultipleConstructors::class
+            val kClazz = TestClasses.DataClassWithMultipleConstructors::class
 
             // this should find listOf(Long, Long, Long)
             val constructorParameterTypes = kClazz.primaryConstructor!!.parameters.map { it.type.javaType }
@@ -1414,59 +1405,184 @@ class DataClassValidatorTest : AssertViolationTest() {
             constructorParameterTypes[1] should be(Long::class.javaPrimitiveType)
             constructorParameterTypes[2] should be(Long::class.javaPrimitiveType)
 
-            val dataClazzDescriptor =
-                validator.getConstraintsForClass(testclasses.DataClassWithMultipleConstructors::class)
-            dataClazzDescriptor.members.size should be(3)
-            dataClazzDescriptor.members.contains("number1") should be(true)
-            dataClazzDescriptor.members["number1"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("number2") should be(true)
-            dataClazzDescriptor.members["number2"]!!.annotations.isEmpty() should be(true)
-            dataClazzDescriptor.members.contains("number3") should be(true)
-            dataClazzDescriptor.members["number3"]!!.annotations.isEmpty() should be(true)
+            val descriptor =
+                validator.getConstraintsForClass(TestClasses.DataClassWithMultipleConstructors::class.java)
+            descriptor.constrainedProperties.size should be(0) // no constructors with any constraints
         }
 
         test("DataClassValidator#find executable 5") {
             /* TestJsonCreatorWithValidations */
-            val kClazz = testclasses.TestJsonCreatorWithValidations::class
+            val kClazz = TestClasses.TestJsonCreatorWithValidations::class
 
             // should find listOf(int)
             val constructorParameterTypes = kClazz.primaryConstructor!!.parameters.map { it.type.javaType }
             constructorParameterTypes.size should be(1)
             constructorParameterTypes.first() should be(Int::class.javaPrimitiveType)
 
-            val dataClazzDescriptor =
-                validator.getConstraintsForClass(testclasses.TestJsonCreatorWithValidations::class)
-            dataClazzDescriptor.members.size should be(1)
-            dataClazzDescriptor.members.contains("int") should be(true)
-            dataClazzDescriptor.members["int"]!!.annotations.size should be(1)
+            val descriptor =
+                validator.getConstraintsForClass(TestClasses.TestJsonCreatorWithValidations::class.java)
+            descriptor.constrainedProperties.size should be(1)
+            descriptor.getConstraintsForProperty("int").constraintDescriptors.size should be(1)
         }
 
         test("DataClassValidator#with Logging trait") {
-            val value = testclasses.PersonWithLogging(42, "Baz Var", null)
+            val value = TestClasses.PersonWithLogging(42, "Baz Var", null)
             validator.validate(value).isEmpty() should be(true)
         }
 
-        test("DataClassValidator#class with incorrect method validation definition 1") {
-            val value = testclasses.WithIncorrectlyDefinedMethodValidation("abcd1234")
+        test("DataClassValidator#class with incorrect post construct validation definition 1") {
+            val value = TestClasses.WithIncorrectlyDefinedPostConstructValidation("abcd1234")
 
             val e = assertThrows<ConstraintDeclarationException> {
                 validator.validate(value)
             }
             e.message should be(
-                "Methods annotated with @MethodValidation must not declare any arguments"
+                "Methods annotated with @PostConstructValidation must not declare any parameters, but method WithIncorrectlyDefinedPostConstructValidation#checkId(String) does."
             )
         }
 
-        test("DataClassValidator#class with incorrect method validation definition 2") {
-            val value = testclasses.AnotherIncorrectlyDefinedMethodValidation("abcd1234")
+        test("DataClassValidator#class with incorrect post construct validation definition 2") {
+            val value = TestClasses.AnotherIncorrectlyDefinedPostConstructValidation("abcd1234")
 
             val e = assertThrows<ConstraintDeclarationException> {
                 validator.validate(value)
             }
             e.message should be(
-                "Methods annotated with @MethodValidation must return a MethodValidationResult"
+                "Methods annotated with @PostConstructValidation must return a PostConstructValidationResult, but method AnotherIncorrectlyDefinedPostConstructValidation#checkId() does not."
             )
         }
+
+        test("Comparison") {
+            val descriptorFromUnderlyingValidator =
+                validator.underlying.getConstraintsForClass(JavaTestClass::class.java)
+            val descriptor = validator.getConstraintsForClass(JavaTestClass::class.java)
+            compareConstructorDescriptors(
+                descriptor.constrainedConstructors,
+                descriptorFromUnderlyingValidator.constrainedConstructors
+            )
+
+            descriptor.hasConstraints() should be(descriptorFromUnderlyingValidator.hasConstraints())
+            descriptor.elementClass shouldBeEqual descriptorFromUnderlyingValidator.elementClass
+            descriptor.constrainedProperties.size shouldBeEqual descriptorFromUnderlyingValidator.constrainedProperties.size
+            descriptor.constraintDescriptors shouldBeEqual descriptorFromUnderlyingValidator.constraintDescriptors
+            comparePropertyDescriptors(descriptor.constrainedProperties, descriptorFromUnderlyingValidator)
+            compareMethodDescriptors(
+                descriptor.getConstraintsForMethod("names"),
+                descriptorFromUnderlyingValidator.getConstraintsForMethod("names")
+            )
+
+            val simpleClazz = validator.getConstraintsForClass(TestClasses.SimpleClass::class.java)
+            val simpleClazzFromUnderlyingValidator =
+                validator.underlying.getConstraintsForClass(TestClasses.SimpleClass::class.java)
+            compareConstructorDescriptors(
+                simpleClazz.constrainedConstructors,
+                simpleClazzFromUnderlyingValidator.constrainedConstructors
+            )
+
+            simpleClazz.hasConstraints() shouldBeEqual simpleClazzFromUnderlyingValidator.hasConstraints()
+            simpleClazz.elementClass shouldBeEqual simpleClazzFromUnderlyingValidator.elementClass
+            simpleClazz.constrainedProperties.size shouldBeEqual simpleClazzFromUnderlyingValidator.constrainedProperties.size
+            simpleClazz.constraintDescriptors shouldBeEqual simpleClazzFromUnderlyingValidator.constraintDescriptors
+            comparePropertyDescriptors(simpleClazz.constrainedProperties, simpleClazzFromUnderlyingValidator)
+        }
+    }
+
+    private fun compareMethodDescriptors(first: MethodDescriptor, second: MethodDescriptor) {
+        first.name shouldBeEqual second.name
+        first.hasConstraints() shouldBeEqual second.hasConstraints()
+        first.hasConstrainedParameters() shouldBeEqual second.hasConstrainedParameters()
+        first.constraintDescriptors shouldBeEqual second.constraintDescriptors
+        first.elementClass shouldBeEqual second.elementClass
+        first.crossParameterDescriptor.elementClass shouldBeEqual second.crossParameterDescriptor.elementClass
+        compareReturnValueDescriptors(first.returnValueDescriptor, second.returnValueDescriptor)
+
+        first.parameterDescriptors.size shouldBeEqual second.parameterDescriptors.size
+        val size = first.parameterDescriptors.size
+        var index = 0
+        while (index < size) {
+            val firstParameter = first.parameterDescriptors[index]
+            val secondParameter = second.parameterDescriptors[index]
+
+            firstParameter.name shouldBeEqual secondParameter.name
+            firstParameter.elementClass shouldBeEqual secondParameter.elementClass
+            firstParameter.constraintDescriptors shouldBeEqual secondParameter.constraintDescriptors
+            firstParameter.index shouldBeEqual secondParameter.index
+            firstParameter.isCascaded shouldBeEqual secondParameter.isCascaded
+            firstParameter.hasConstraints() shouldBeEqual secondParameter.hasConstraints()
+            compareConstrainedContainerElementTypeSets(
+                firstParameter.constrainedContainerElementTypes,
+                secondParameter.constrainedContainerElementTypes
+            )
+
+            index += 1
+        }
+    }
+
+    private fun compareConstructorDescriptors(first: Set<ConstructorDescriptor>, second: Set<ConstructorDescriptor>) {
+        first.size shouldBeEqual second.size
+        val iterator = first.iterator()
+        val secondIterator = second.iterator()
+        while (iterator.hasNext()) {
+            val firstOne = iterator.next()
+            val secondOne = secondIterator.next()
+
+            firstOne.name shouldBeEqual secondOne.name
+            firstOne.elementClass shouldBeEqual secondOne.elementClass
+            firstOne.hasConstraints() shouldBeEqual secondOne.hasConstraints()
+            firstOne.hasConstrainedParameters() shouldBeEqual secondOne.hasConstrainedParameters()
+            compareReturnValueDescriptors(firstOne.returnValueDescriptor, secondOne.returnValueDescriptor)
+        }
+    }
+
+    private fun compareReturnValueDescriptors(first: ReturnValueDescriptor, second: ReturnValueDescriptor) {
+        first.elementClass shouldBeEqual second.elementClass
+        first.isCascaded shouldBeEqual second.isCascaded
+        first.constrainedContainerElementTypes
+        first.constraintDescriptors shouldBeEqual second.constraintDescriptors
+        compareConstrainedContainerElementTypeSets(
+            first.constrainedContainerElementTypes,
+            second.constrainedContainerElementTypes
+        )
+    }
+
+    private fun comparePropertyDescriptors(first: Set<PropertyDescriptor>, second: BeanDescriptor) {
+        first.map { propertyDescriptor ->
+            val fromUnderlying = second.getConstraintsForProperty(propertyDescriptor.propertyName)
+            fromUnderlying shouldNot beNull()
+            propertyDescriptor.elementClass shouldBeEqual fromUnderlying.elementClass
+            propertyDescriptor.isCascaded shouldBeEqual fromUnderlying.isCascaded
+            propertyDescriptor.constraintDescriptors shouldBeEqual fromUnderlying.constraintDescriptors
+            propertyDescriptor.constrainedContainerElementTypes.size shouldBeEqual fromUnderlying.constrainedContainerElementTypes.size
+
+            compareConstrainedContainerElementTypes(
+                propertyDescriptor.constrainedContainerElementTypes.first(),
+                fromUnderlying.constrainedContainerElementTypes.first()
+            )
+        }
+    }
+
+    private fun compareConstrainedContainerElementTypeSets(
+        first: Set<ContainerElementTypeDescriptor>,
+        second: Set<ContainerElementTypeDescriptor>
+    ) {
+        first.size shouldBeEqual second.size
+        val iterator = first.iterator()
+        val secondIterator = second.iterator()
+        while (iterator.hasNext()) {
+            compareConstrainedContainerElementTypes(iterator.next(), secondIterator.next())
+        }
+    }
+
+    private fun compareConstrainedContainerElementTypes(
+        first: ContainerElementTypeDescriptor,
+        second: ContainerElementTypeDescriptor
+    ) {
+        first.elementClass shouldBeEqual second.elementClass
+        first.containerClass shouldBeEqual second.containerClass
+        first.typeArgumentIndex shouldBeEqual second.typeArgumentIndex
+        first.isCascaded shouldBeEqual second.isCascaded
+        first.constraintDescriptors shouldBeEqual second.constraintDescriptors
+        first.constrainedContainerElementTypes.size shouldBeEqual second.constrainedContainerElementTypes.size
     }
 
     @Suppress("UNCHECKED_CAST", "PLATFORM_CLASS_MAPPED_TO_KOTLIN")
@@ -1478,204 +1594,182 @@ class DataClassValidatorTest : AssertViolationTest() {
         return result as java.util.Set<Int>
     }
 
-    private fun verifyDriverClassDescriptor(
-        driverDataClassDescriptor: DataClassDescriptor<testclasses.Driver>
-    ) {
-        val person = driverDataClassDescriptor.members["person"]!!
-        person.kotlinType should be(testclasses.Person::class.createType())
-        // cascaded types will have non-null 'cascadedType'
-        person.cascadedType shouldNot beNull()
-        person.cascadedType should be(testclasses.Person::class.createType())
-        person.annotations.isEmpty() should be(true)
-        person.isCascaded should be(true)
+//    private fun findConstrainedProperty(descriptor: BeanDescriptor, propertyName: String): PropertyDescriptor {
+//        val propertyDescriptor = descriptor.constrainedProperties.find { it.propertyName == propertyName }
+//        assert(propertyDescriptor != null)
+//        return propertyDescriptor!!
+//    }
+
+    private fun verifyDriverClassDescriptor(/* TestClasses.Driver::class.java */ descriptor: BeanDescriptor) {
+        val personConstrainedPropertyDescriptor = descriptor.constrainedProperties.find { it.propertyName == "person" }
+        personConstrainedPropertyDescriptor shouldNot beNull()
+        personConstrainedPropertyDescriptor!!.elementClass should be(TestClasses.Person::class.java)
+        personConstrainedPropertyDescriptor.constraintDescriptors.isEmpty() should be(true) // no constraints, just the @Valid annotation for cascading
+        personConstrainedPropertyDescriptor.isCascaded should be(true)
 
         // person is cascaded, so let's look it up
-        val personDescriptor = validator.getConstraintsForClass(testclasses.Person::class)
-        personDescriptor.members.size should be(6)
-        val city = personDescriptor.members["city"]!!
-        city.kotlinType should be(String::class.createType())
-        city.annotations.isEmpty() should be(true)
-        city.isCascaded should be(false)
+        val personBeanDescriptor = validator.getConstraintsForClass(TestClasses.Person::class.java)
+        personBeanDescriptor.constrainedProperties.size should be(3)
 
-        val name = personDescriptor.members["name"]!!
-        name.kotlinType should be(String::class.createType())
-        name.annotations.size should be(1)
-        name.annotations.first().annotationClass should be(NotEmpty::class)
-        name.isCascaded should be(false)
-
-        val state = personDescriptor.members["state"]!!
-        state.kotlinType should be(String::class.createType())
-        state.annotations.isEmpty() should be(true)
-        state.isCascaded should be(false)
-
-        val company = personDescriptor.members["company"]!!
-        company.kotlinType should be(String::class.createType())
-        company.annotations.isEmpty() should be(true)
-        company.isCascaded should be(false)
-
-        val id = personDescriptor.members["id"]!!
-        id.kotlinType should be(String::class.createType())
-        id.annotations.size should be(1)
-        id.annotations.first().annotationClass should be(NotEmpty::class)
+        val id = personBeanDescriptor.getConstraintsForProperty("id")
+        id.elementClass should be(String::class.java)
+        id.constraintDescriptors.size should be(1)
+        id.constraintDescriptors.first().annotation.annotationClass should be(NotEmpty::class)
         id.isCascaded should be(false)
 
-        val address = personDescriptor.members["address"]!!
-        address.kotlinType should be(testclasses.Address::class.createType())
-        address.annotations.isEmpty() should be(true)
+        val name = personBeanDescriptor.getConstraintsForProperty("name")
+        name.elementClass should be(String::class.java)
+        name.constraintDescriptors.size should be(1)
+        name.constraintDescriptors.first().annotation.annotationClass should be(NotEmpty::class)
+        name.isCascaded should be(false)
+
+        val address = personBeanDescriptor.getConstraintsForProperty("address")
+        address.elementClass should be(TestClasses.Address::class.java)
+        address.constraintDescriptors.isEmpty() should be(true)
         address.isCascaded should be(true)
 
         // address is cascaded, so let's look it up
-        val addressDescriptor = validator.getConstraintsForClass(testclasses.Address::class)
-        addressDescriptor.members.size should be(6)
+        val addressDescriptor = validator.getConstraintsForClass(TestClasses.Address::class.java)
+        addressDescriptor.constrainedProperties.size should be(1)
 
-        val line1 = addressDescriptor.members["line1"]!!
-        line1.kotlinType should be(String::class.createType())
-        line1.annotations.isEmpty() should be(true)
-        line1.isCascaded should be(false)
-
-        val line2 = addressDescriptor.members["line2"]!!
-        line2.kotlinType should be(String::class.createType(nullable = true))
-        line2.annotations.isEmpty() should be(true)
-        line2.isCascaded should be(false)
-
-        val addressCity = addressDescriptor.members["city"]!!
-        addressCity.kotlinType should be(String::class.createType())
-        addressCity.annotations.isEmpty() should be(true)
-        addressCity.isCascaded should be(false)
-
-        val addressState = addressDescriptor.members["state"]!!
-        addressState.kotlinType should be(String::class.createType())
-        addressState.annotations.size should be(1)
-        addressState.annotations.first().annotationClass should be(StateConstraint::class)
+        val addressState = addressDescriptor.getConstraintsForProperty("state")
+        addressState.elementClass should be(String::class.java)
+        addressState.constraintDescriptors.size should be(1)
+        addressState.constraintDescriptors.first().annotation.annotationClass should be(StateConstraint::class)
         addressState.isCascaded should be(false)
 
-        val zipcode = addressDescriptor.members["zipcode"]!!
-        zipcode.kotlinType should be(String::class.createType())
-        zipcode.annotations.isEmpty() should be(true)
-        zipcode.isCascaded should be(false)
+        val validateAddressMethodDescriptor = personBeanDescriptor.getConstraintsForMethod("validateAddress")
+        validateAddressMethodDescriptor shouldNot beNull()
+        validateAddressMethodDescriptor.constraintDescriptors.size shouldBeEqual 0 //@PostConstructValidation should be on the Return Value
+        validateAddressMethodDescriptor.returnValueDescriptor.constraintDescriptors.size shouldBeEqual 1
+        validateAddressMethodDescriptor
+            .returnValueDescriptor
+            .constraintDescriptors
+            .first()
+            .annotation
+            .annotationClass should be(PostConstructValidation::class)
 
-        val additionalPostalCode = addressDescriptor.members["additionalPostalCode"]!!
-        additionalPostalCode.kotlinType should be(String::class.createType(nullable = true))
-        // not cascaded so no contained type
-        additionalPostalCode.cascadedType should beNull()
-        additionalPostalCode.annotations.isEmpty() should be(true)
-        additionalPostalCode.isCascaded should be(false)
 
-        personDescriptor.methods.size should be(1)
-        personDescriptor.methods.first().callable.name should be("validateAddress")
-        personDescriptor.methods.first().annotations.size should be(1)
-        personDescriptor.methods.first().annotations.first().annotationClass should be(
-            MethodValidation::class
-        )
-        personDescriptor.methods.first().members.size should be(0)
-
-        val car = driverDataClassDescriptor.members["car"]!!
-        car.kotlinType should be(testclasses.Car::class.createType())
-        car.cascadedType shouldNot beNull()
-        car.cascadedType should be(testclasses.Car::class.createType())
-        car.annotations.isEmpty() should be(true)
+        val car = descriptor.getConstraintsForProperty("car")
+        car.elementClass should be(TestClasses.Car::class.java)
+        car.constraintDescriptors.isEmpty() should be(true)
         car.isCascaded should be(true)
 
         // car is cascaded, so let's look it up
-        val carDescriptor = validator.getConstraintsForClass(testclasses.Car::class)
-        carDescriptor.members.size should be(13)
+        val carDescriptor = validator.getConstraintsForClass(TestClasses.Car::class.java)
+        carDescriptor.constrainedProperties.size should be(5)
 
         // just look at annotated and cascaded fields in car
-        val year = carDescriptor.members["year"]!!
-        year.kotlinType should be(Int::class.createType())
-        year.annotations.size should be(1)
-        year.annotations.first().annotationClass should be(Min::class)
+        val year = carDescriptor.getConstraintsForProperty("year")
+        year.elementClass should be(Int::class.javaPrimitiveType)
+        year.constraintDescriptors.size should be(1)
+        year.constraintDescriptors.first().annotation.annotationClass should be(Min::class)
         year.isCascaded should be(false)
 
-        val owners = carDescriptor.members["owners"]!!
-        owners.kotlinType should be(
+        val owners = carDescriptor.getConstraintsForProperty("owners")
+        owners.elementClass should be(
             List::class.createType(
                 arguments =
                 listOf(
                     KTypeProjection(
                         KVariance.INVARIANT,
-                        testclasses.Person::class.createType()
+                        TestClasses.Person::class.createType()
                     )
                 )
-            )
+            ).jvmErasure.java
         )
-        owners.cascadedType shouldNot beNull()
-        owners.cascadedType should be(testclasses.Person::class.createType())
-        owners.annotations.isEmpty() should be(true)
+        owners.constraintDescriptors.isEmpty() should be(true)
         owners.isCascaded should be(true)
 
-        val licensePlate = carDescriptor.members["licensePlate"]!!
-        licensePlate.kotlinType should be(String::class.createType())
-        licensePlate.annotations.size should be(2)
-        licensePlate.annotations.first().annotationClass should be(NotEmpty::class)
-        licensePlate.annotations.last().annotationClass should be(Size::class)
+        val licensePlate = carDescriptor.getConstraintsForProperty("licensePlate")
+        licensePlate.elementClass should be(String::class.java)
+        licensePlate.constraintDescriptors.size should be(2)
+        licensePlate.constraintDescriptors.first().annotation.annotationClass should be(NotEmpty::class)
+        licensePlate.constraintDescriptors.last().annotation.annotationClass should be(Size::class)
         licensePlate.isCascaded should be(false)
 
-        val numDoors = carDescriptor.members["numDoors"]!!
-        numDoors.kotlinType should be(Int::class.createType())
-        numDoors.annotations.size should be(1)
-        numDoors.annotations.first().annotationClass should be(Min::class)
+        val numDoors = carDescriptor.getConstraintsForProperty("numDoors")
+        numDoors.elementClass should be(Int::class.javaPrimitiveType)
+        numDoors.constraintDescriptors.size should be(1)
+        numDoors.constraintDescriptors.first().annotation.annotationClass should be(Min::class)
         numDoors.isCascaded should be(false)
 
-        val passengers = carDescriptor.members["passengers"]!!
-        passengers.kotlinType should be(
+        val passengers = carDescriptor.getConstraintsForProperty("passengers")
+        passengers.constraintDescriptors.isEmpty() should be(true)
+        passengers.elementClass should be(
             List::class.createType(
                 listOf(
                     KTypeProjection(
                         KVariance.INVARIANT,
-                        testclasses.Person::class.createType()
+                        TestClasses.Person::class.createType()
                     )
                 )
-            )
+            ).jvmErasure.java
         )
-        passengers.cascadedType shouldNot beNull()
-        passengers.cascadedType should be(testclasses.Person::class.createType())
-        passengers.annotations.isEmpty() should be(true)
+        passengers.isCascaded should be(true) // because of a workaround both the parameter and the constrained container type are marked as cascade.
+        passengers.constrainedContainerElementTypes.isEmpty() should be(false)
+        passengers.constrainedContainerElementTypes.size shouldBeEqual 1
+        passengers.constrainedContainerElementTypes.first().elementClass should be(TestClasses.Person::class.java)
+        passengers.constrainedContainerElementTypes.first().isCascaded should be(true)
+        passengers.constraintDescriptors.isEmpty() should be(true)
         passengers.isCascaded should be(true)
 
-        carDescriptor.methods.size should be(4)
-        val mappedCarMethods = carDescriptor.methods.associateBy { methodDescriptor -> methodDescriptor.callable.name }
-
-        val validateId = mappedCarMethods["validateId"]
+        val validateId = carDescriptor.getConstraintsForMethod("validateId")
         validateId shouldNot beNull()
-        validateId!!.members.isEmpty() should be(true)
-        validateId.annotations.size should be(1)
-        validateId.annotations.first().annotationClass should be(MethodValidation::class)
-        validateId.members.size should be(0)
+        validateId.constraintDescriptors.size shouldBeEqual 0
+        validateId.returnValueDescriptor.constraintDescriptors.size shouldBeEqual 1
+        validateId.returnValueDescriptor.constraintDescriptors.first().annotation.annotationClass should be(
+            PostConstructValidation::class
+        )
 
-        val validateYearBeforeNow = mappedCarMethods["validateYearBeforeNow"]
+        val validateYearBeforeNow = carDescriptor.getConstraintsForMethod("validateYearBeforeNow")
         validateYearBeforeNow shouldNot beNull()
-        validateYearBeforeNow!!.members.isEmpty() should be(true)
-        validateYearBeforeNow.annotations.size should be(1)
-        validateYearBeforeNow.annotations.first().annotationClass should be(MethodValidation::class)
-        validateYearBeforeNow.members.size should be(0)
+        validateYearBeforeNow.constraintDescriptors.size shouldBeEqual 0
+        validateYearBeforeNow.returnValueDescriptor.constraintDescriptors.size shouldBeEqual 1
+        validateYearBeforeNow.returnValueDescriptor.constraintDescriptors.first().annotation.annotationClass should be(
+            PostConstructValidation::class
+        )
 
-        val ownershipTimesValid = mappedCarMethods["ownershipTimesValid"]
+        val ownershipTimesValid = carDescriptor.getConstraintsForMethod("ownershipTimesValid")
         ownershipTimesValid shouldNot beNull()
-        ownershipTimesValid!!.members.isEmpty() should be(true)
-        ownershipTimesValid.annotations.size should be(1)
-        ownershipTimesValid.annotations.first().annotationClass should be(MethodValidation::class)
-        ownershipTimesValid.members.size should be(0)
+        ownershipTimesValid.constraintDescriptors.size shouldBeEqual 0
+        ownershipTimesValid.returnValueDescriptor.constraintDescriptors.size shouldBeEqual 1
+        ownershipTimesValid.returnValueDescriptor.constraintDescriptors.first().annotation.annotationClass should be(
+            PostConstructValidation::class
+        )
 
-        val warrantyTimeValid = mappedCarMethods["warrantyTimeValid"]
+        val warrantyTimeValid = carDescriptor.getConstraintsForMethod("warrantyTimeValid")
         warrantyTimeValid shouldNot beNull()
-        warrantyTimeValid!!.members.isEmpty() should be(true)
-        warrantyTimeValid.annotations.size should be(1)
-        warrantyTimeValid.annotations.first().annotationClass should be(MethodValidation::class)
-        warrantyTimeValid.members.size should be(0)
+        warrantyTimeValid.constraintDescriptors.size shouldBeEqual 0
+        warrantyTimeValid.returnValueDescriptor.constraintDescriptors.size shouldBeEqual 1
+        warrantyTimeValid.returnValueDescriptor.constraintDescriptors.first().annotation.annotationClass should be(
+            PostConstructValidation::class
+        )
     }
 
-    private fun getValidationAnnotations(clazz: KClass<*>, name: String): List<Annotation> {
+    private fun getValidationAnnotations(clazz: Class<*>, name: String): List<Annotation> {
         val descriptor = validator.descriptorFactory.describe(clazz)
-        return when (val property = descriptor.members[name]) {
+        return when (val property = descriptor.getConstraintsForProperty(name)) {
             null -> {
-                when (val method = descriptor.methods.find { it.callable.name == name }) {
+                var method = descriptor.getConstraintsForMethod(name)
+                if (method == null) {
+                    method = descriptor.getConstraintsForMethod("get" + name.replaceFirstChar { it.uppercase() })
+                }
+                when (method) {
                     null -> emptyList()
-                    else -> method.annotations
+                    else -> {
+                        method
+                            .constraintDescriptors
+                            .map { it.annotation } +
+                                method
+                                    .returnValueDescriptor
+                                    .constraintDescriptors
+                                    .map { it.annotation }
+                    }
                 }
             }
 
-            else -> property.annotations
+            else -> property.constraintDescriptors.map { it.annotation }
         }
     }
 }

@@ -1,7 +1,7 @@
 package angstromio.validation.constraints
 
 import angstromio.validation.DataClassValidator
-import angstromio.validation.testclasses.UUIDExample
+import angstromio.validation.TestClasses.UUIDExample
 import io.kotest.matchers.equals.shouldBeEqual
 import io.kotest.property.Arb
 import io.kotest.property.arbitrary.Codepoint
@@ -38,7 +38,7 @@ class UUIDConstraintValidatorTest : ConstraintValidatorTest() {
     }
 
     private inline fun <reified T : Any> validate(value: Any?): Set<ConstraintViolation<T>> =
-        super.validate<UUID, T>(T::class, testFieldName, value)
+        super.validate<UUID, T>(T::class.java, testFieldName, value)
 
     private fun isNotUUID(value: String): Boolean {
         return try {

@@ -1,6 +1,7 @@
 package org.hibernate.validator.internal.properties.javabean
 
 import java.lang.reflect.Constructor
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 
 internal object JavaBeanFactory {
@@ -10,4 +11,7 @@ internal object JavaBeanFactory {
 
     fun newJavaBeanConstructor(constructor: Constructor<*>?): JavaBeanConstructor =
         JavaBeanConstructor(constructor)
+
+    fun newJavaBeanField(field: Field, resolvedPropertyName: String): JavaBeanField =
+        JavaBeanField(field, resolvedPropertyName)
 }

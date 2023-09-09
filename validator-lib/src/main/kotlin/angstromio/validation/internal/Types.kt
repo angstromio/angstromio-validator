@@ -1,6 +1,6 @@
 package angstromio.validation.internal
 
-object Types {
+internal object Types {
 
     fun refineAsJavaType(clazz: Class<*>, instance: Any?): Class<out Any> {
         val name = clazz.name
