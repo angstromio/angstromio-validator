@@ -5,6 +5,7 @@ import angstromio.util.extensions.Annotations.eq
 import angstromio.util.extensions.Annotations.notEq
 import angstromio.util.extensions.Anys.isInstanceOf
 import angstromio.util.extensions.Nulls.mapNotNull
+import angstromio.util.extensions.Nulls.whenNotNull
 import angstromio.validation.cfg.ConstraintMapping
 import angstromio.validation.constraints.PostConstructValidation
 import angstromio.validation.engine.PostConstructValidationResult
@@ -504,67 +505,80 @@ class DataClassValidator(
         return validateFieldValue(fieldName, annotations, value, groups.toList())
     }
 
+    /**
+     * Given a constructed object instance, invoke any @PostConstructValidation annotated methods and
+     * return the set of failing ConstraintViolations.
+     *
+     * @return set of any failed validations as ConstraintViolations.
+     */
     fun <T : Any> validatePostConstructValidationMethods(
         obj: T,
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
-        val descriptor = getConstraintsForClass(obj::class.java)
         val methods = obj::class.java.declaredMethods
         val results = mutableSetOf<ConstraintViolation<T>>()
         methods.forEach { method ->
-            val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)
-            if (isPostConstructValidationConstrainedMethod(methodDescriptor, obj)) {
-                val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
-                methodPath.addReturnValueNode()
-
-                results.addAll(
-                    executePostConstructValidations(
-                        context = ValidationContext(
-                            fieldName = methodDescriptor.name,
-                            rootClazz = obj::class.java,
-                            root = obj,
-                            leaf = obj,
-                            path = methodPath
-                        ),
-                        method = method,
-                        methodDescriptor = methodDescriptor,
-                        clazzInstance = obj,
-                        groups = groups.toList()
-                    )
+            results.addAll(
+                validatePostConstructValidationMethod(
+                    obj = obj,
+                    method = method,
+                    groups = groups
                 )
-            }
+            )
         }
         return results.toSet()
     }
 
+
+    /**
+     * If the given method is annotated with an @PostConstructValidation annotation, execute the validation given the
+     * object instance. If the given method does not represent an @PostConstructValidation annotated method of the
+     * given object instance, no validation will be performed and an empty set of violations will be returned. Otherwise,
+     * any failing validations will be returned as the set of ConstraintViolations.
+     *
+     * @return the set of failing validations.
+     */
     fun <T : Any> validatePostConstructValidationMethod(
         obj: T,
         method: Method,
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
+        val results = mutableSetOf<ConstraintViolation<T>>()
         // Note: we could do descriptorFactory#describeMethod here, but we want to ensure the PostConstructValidation
         // is an actual method on the given obj instance.
         val descriptor = getConstraintsForClass(obj::class.java)
-        return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
-            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
+        when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
+            null -> Unit
             else -> {
-                val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
-                methodPath.addReturnValueNode()
-                executePostConstructValidations(
-                    context = ValidationContext(
-                        fieldName = method.name,
-                        rootClazz = obj::class.java,
-                        root = obj,
-                        leaf = obj,
-                        path = methodPath
-                    ),
-                    method = method,
-                    methodDescriptor = methodDescriptor,
-                    clazzInstance = obj,
-                    groups = groups.toList()
-                )
+                // if the method has an @PostConstructValidation annotation, run the validation
+                val constraintDescriptor: ConstraintDescriptorImpl<PostConstructValidation>? =
+                    methodDescriptor
+                        .returnValueDescriptor
+                        .constraintDescriptors
+                        .find { it.annotation.eq<PostConstructValidation>() } as? ConstraintDescriptorImpl<PostConstructValidation>
+
+                constraintDescriptor.whenNotNull { notNullConstraintDescriptor ->
+                    val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
+                    results.addAll(
+                        executePostConstructValidations(
+                            context = ValidationContext(
+                                fieldName = method.name,
+                                rootClazz = obj::class.java,
+                                root = obj,
+                                leaf = obj,
+                                path = methodPath
+                            ),
+                            method = method,
+                            constraintDescriptor = notNullConstraintDescriptor,
+                            clazzInstance = obj,
+                            groups = groups.toList()
+                        )
+                    )
+                }
             }
         }
+
+        return results.toSet()
     }
 
 
@@ -784,15 +798,38 @@ class DataClassValidator(
             .returnValueDescriptor
             .constraintDescriptors.find { it.annotation.eq<PostConstructValidation>() } as? ConstraintDescriptorImpl<PostConstructValidation>
             ?: throw ValidationException("Cannot find @${PostConstructValidation::class.simpleName} annotation on ${method.declaringClass::class.simpleName}#${method.name}()")
+        return executePostConstructValidations(
+            context = context,
+            method = method,
+            constraintDescriptor = constraintDescriptor,
+            clazzInstance = clazzInstance,
+            groups = groups
+        )
+    }
+
+    private fun <T : Any> executePostConstructValidations(
+        context: ValidationContext<T>,
+        method: Method,
+        constraintDescriptor: ConstraintDescriptorImpl<PostConstructValidation>,
+        clazzInstance: Any?,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> {
         return if (groupsEnabled(constraintDescriptor, groups) && clazzInstance != null) {
             try {
                 val postConstructValidationResult = method.invoke(clazzInstance) as PostConstructValidationResult
                 val pathWithMethodName = PathImpl.createCopy(context.path)
-                pathWithMethodName.addPropertyNode(method.name)
+                val path = if (context.path.leafNode.name == method.name) {
+                    // don't update the path, the leaf is already the method name.
+                    pathWithMethodName
+                } else {
+                    pathWithMethodName.addPropertyNode(method.name)
+                    pathWithMethodName
+                }
+
                 validatePostConstructValidation(
                     context = context,
                     clazzInstance = clazzInstance,
-                    path = pathWithMethodName,
+                    path = path,
                     constraintDescriptor,
                     constraintDescriptor.annotation,
                     postConstructValidationResult
@@ -900,11 +937,11 @@ class DataClassValidator(
                     val methodDescriptor = iterator.next()
                     if (isPostConstructValidationConstrainedMethod(methodDescriptor, value)) {
                         val method = descriptor.elementClass.getMethod(
-                            /* name                 = */ methodDescriptor.name,
+                            /* name                 = */
+                            methodDescriptor.name,
                             /* ...parameterTypes    = */
                             *methodDescriptor.parameterDescriptors.map { it.elementClass }.toTypedArray()
                         )
-
 
                         val methodResults =
                             executePostConstructValidations(
