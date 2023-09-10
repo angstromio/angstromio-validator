@@ -23,9 +23,11 @@ import jakarta.validation.ConstraintDeclarationException
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintViolation
 import jakarta.validation.ConstraintViolationException
+import jakarta.validation.MessageInterpolator
 import jakarta.validation.UnexpectedTypeException
 import jakarta.validation.Validation
 import jakarta.validation.ValidationException
+import jakarta.validation.Validator
 import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.NotEmpty
 import jakarta.validation.constraints.Pattern
@@ -36,6 +38,8 @@ import jakarta.validation.metadata.ContainerElementTypeDescriptor
 import jakarta.validation.metadata.MethodDescriptor
 import jakarta.validation.metadata.PropertyDescriptor
 import jakarta.validation.metadata.ReturnValueDescriptor
+import jakarta.validation.spi.ValidationProvider
+import org.hibernate.validator.HibernateValidator
 import org.hibernate.validator.HibernateValidatorConfiguration
 import org.hibernate.validator.internal.util.annotation.AnnotationDescriptor
 import org.hibernate.validator.internal.util.annotation.AnnotationFactory
@@ -66,6 +70,35 @@ class ValidatorTest : AssertViolationTest() {
                     InvalidConstraintValidator::class.java
                 )
             )
+
+        @Suppress("UNCHECKED_CAST")
+        fun buildHibernateValidator(
+            messageInterpolator: MessageInterpolator? = null,
+            constraintMappings: Set<ConstraintMapping> = emptySet()
+        ): Validator {
+            val configuration: HibernateValidatorConfiguration =
+                Validation
+                    .byProvider(HibernateValidator::class.java as Class<ValidationProvider<HibernateValidatorConfiguration>>)
+                    .configure()
+
+            // add user-configured message interpolator
+            messageInterpolator?.let { interpolator ->
+                configuration.messageInterpolator(interpolator)
+            }
+            // add user-configured constraint mappings
+            constraintMappings.forEach { constraintMapping ->
+                val hibernateConstraintMapping: org.hibernate.validator.cfg.ConstraintMapping =
+                    configuration.createConstraintMapping()
+                hibernateConstraintMapping
+                    .constraintDefinition(constraintMapping.annotationClazz as Class<Annotation>)
+                    .includeExistingValidators(constraintMapping.includeExistingValidators)
+                    .validatedBy(constraintMapping.constraintValidator as Class<ConstraintValidator<Annotation, *>>)
+                configuration.addMapping(hibernateConstraintMapping)
+            }
+
+            val validatorFactory = configuration.buildValidatorFactory()
+            return validatorFactory.validator
+        }
     }
 
     override val validator: DataClassValidator =
@@ -73,6 +106,11 @@ class ValidatorTest : AssertViolationTest() {
             .builder()
             .withConstraintMappings(CustomConstraintMappings)
             .validator()
+
+    // Generic Hibernate Validator for comparison
+    private val underlying: Validator = buildHibernateValidator(
+        constraintMappings = CustomConstraintMappings
+    )
 
     init {
         afterSpec {
@@ -413,7 +451,7 @@ class ValidatorTest : AssertViolationTest() {
             e.message should be("${TestClasses.NotADataClass::class.java} is not a valid data class.")
 
             // underlying validator doesn't find the constraintDescriptors (either executable nor inherited)
-            val violations = validator.underlying.validate(value).toSet()
+            val violations = underlying.validate(value).toSet()
             violations.isEmpty() should be(true)
         }
 
@@ -422,7 +460,7 @@ class ValidatorTest : AssertViolationTest() {
 
             assertThrows<ConstraintDeclarationException> { assertViolations(obj = value, withViolations = emptyList()) }
             // this also fails with underlying validator
-            assertThrows<ConstraintDeclarationException> { validator.underlying.validate(value).toSet() }
+            assertThrows<ConstraintDeclarationException> { underlying.validate(value).toSet() }
 
             val cascadingValue = TestClasses.WithCascadingSetAnnotation(emptyList())
             assertThrows<ConstraintDeclarationException> {
@@ -432,7 +470,7 @@ class ValidatorTest : AssertViolationTest() {
                 )
             }
             // this also fails with underlying validator
-            assertThrows<ConstraintDeclarationException> { validator.underlying.validate(cascadingValue).toSet() }
+            assertThrows<ConstraintDeclarationException> { underlying.validate(cascadingValue).toSet() }
         }
 
         test("DataClassValidator#works with @get meta annotation") {
@@ -454,7 +492,7 @@ class ValidatorTest : AssertViolationTest() {
             )
 
             // this also works with the underlying validator
-            val violations = validator.underlying.validate(value).toSet()
+            val violations = underlying.validate(value).toSet()
             violations.size shouldBeEqual 1
             val violation = violations.first()
             violation.message should be("must not be empty")
@@ -483,7 +521,7 @@ class ValidatorTest : AssertViolationTest() {
             )
 
             // also works with underlying validator
-            val violations = validator.underlying.validate(value).toSet()
+            val violations = underlying.validate(value).toSet()
             violations.size shouldBeEqual 1
             val violation = violations.first()
             violation.message should be("must not be empty")
@@ -874,7 +912,7 @@ class ValidatorTest : AssertViolationTest() {
             )
 
             // compare the class-level violation which should be the same as from the DataClassValidator
-            val fromUnderlyingViolations = validator.underlying.validate(car).toSet()
+            val fromUnderlyingViolations = underlying.validate(car).toSet()
             fromUnderlyingViolations.size should be(1)
             val violation = fromUnderlyingViolations.first()
             violation.propertyPath.toString() should be("")
@@ -1114,11 +1152,11 @@ class ValidatorTest : AssertViolationTest() {
             val d = TestClasses.InvalidDoublePerson("Andrea") { "" }
             assertViolations(d)
             // underlying also ignores function arguments
-            validator.underlying.validate(d).size should be(0)
+            underlying.validate(d).size should be(0)
             val d2 = TestClasses.DoublePerson("Andrea") { "" }
             assertViolations(d2)
             // underlying also ignores function arguments
-            validator.underlying.validate(d2).size should be(0)
+            underlying.validate(d2).size should be(0)
 
             // verification fails here because of the post construct validation
             val d3 = TestClasses.ValidDoublePerson("Andrea") { "" }
@@ -1133,12 +1171,12 @@ class ValidatorTest : AssertViolationTest() {
             )
 
             // underlying still ignores function arguments
-            validator.underlying.validate(d3).size should be(0)
+            underlying.validate(d3).size should be(0)
 
             val d4 = TestClasses.PossiblyValidDoublePerson("Andrea") { "" }
             assertViolations(d4)
             // underlying also ignores function arguments
-            validator.underlying.validate(d4).size should be(0)
+            underlying.validate(d4).size should be(0)
 
             val d5 = TestClasses.WithFinalValField(
                 UUID.randomUUID().toString(),
@@ -1454,7 +1492,7 @@ class ValidatorTest : AssertViolationTest() {
 
         test("Comparison") {
             val descriptorFromUnderlyingValidator =
-                validator.underlying.getConstraintsForClass(JavaTestClass::class.java)
+                underlying.getConstraintsForClass(JavaTestClass::class.java)
             val descriptor = validator.getConstraintsForClass(JavaTestClass::class.java)
             compareConstructorDescriptors(
                 descriptor.constrainedConstructors,
@@ -1473,7 +1511,7 @@ class ValidatorTest : AssertViolationTest() {
 
             val simpleClazz = validator.getConstraintsForClass(TestClasses.SimpleClass::class.java)
             val simpleClazzFromUnderlyingValidator =
-                validator.underlying.getConstraintsForClass(TestClasses.SimpleClass::class.java)
+                underlying.getConstraintsForClass(TestClasses.SimpleClass::class.java)
             compareConstructorDescriptors(
                 simpleClazz.constrainedConstructors,
                 simpleClazzFromUnderlyingValidator.constrainedConstructors

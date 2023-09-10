@@ -61,9 +61,8 @@ import kotlin.reflect.KFunction
 
 @Suppress("UNCHECKED_CAST")
 class DataClassValidator(
-    private val cacheSize: Long,
+    cacheSize: Long,
     private val validatorFactory: ValidatorFactoryInspector,
-    internal val underlying: Validator
 ) : Validator, ExecutableValidator {
 
     companion object {
@@ -133,11 +132,9 @@ class DataClassValidator(
                 configuration.addMapping(hibernateConstraintMapping)
             }
 
-            val validatorFactory = configuration.buildValidatorFactory()
             return DataClassValidator(
                 cacheSize = this.descriptorCacheSize,
-                ValidatorFactoryInspector(validatorFactory as ValidatorFactoryImpl),
-                validatorFactory.validator
+                ValidatorFactoryInspector(configuration.buildValidatorFactory() as ValidatorFactoryImpl)
             )
         }
     }
