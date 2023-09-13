@@ -5,3 +5,8 @@
 [![codecov](https://codecov.io/gh/angstromio/angstromio-validator/graph/badge.svg?token=ucU5A07APY)](https://codecov.io/gh/angstromio/angstromio-validator)
 
 A Kotlin wrapper over the Hibernate validator.
+
+
+## TODOs
+- More tests
+- Group sequencing support

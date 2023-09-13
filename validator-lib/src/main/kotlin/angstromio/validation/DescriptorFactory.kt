@@ -689,7 +689,7 @@ internal class DescriptorFactory(
         discriminator: ValidationTarget,
         annotations: Array<Annotation>
     ): Array<Annotation> {
-        val annotationsList = annotations.filter { annotation ->
+        val annotationsList = annotations.filter { isConstraintAnnotation(it) }.filter { annotation ->
             val validators: Set<ConstraintValidator<*, *>> = ConstraintValidatorFactoryHelper.findConstraintValidators(
                 validatorFactory = validatorFactory,
                 annotationClazz = annotation.annotationClass.java
