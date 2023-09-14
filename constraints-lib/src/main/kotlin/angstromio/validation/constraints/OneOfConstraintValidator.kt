@@ -56,10 +56,9 @@ internal class OneOfConstraintValidator : ConstraintValidator<OneOf, Any> {
     }
 
     private fun valueToString(value: List<*>): String {
-        return if (value.isEmpty()) {
+        val valueString = value.joinToString()
+        return valueString.ifEmpty {
             "<empty>"
-        } else {
-            value.joinToString()
         }
     }
 

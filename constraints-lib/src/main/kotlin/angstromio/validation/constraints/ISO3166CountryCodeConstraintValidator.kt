@@ -58,10 +58,9 @@ class ISO3166CountryCodeConstraintValidator : ConstraintValidator<CountryCode, A
     }
 
     private fun valueToString(value: List<*>): String {
-        return if (value.isEmpty()) {
+        val valueString = value.joinToString()
+        return valueString.ifEmpty {
             "<empty>"
-        } else {
-            value.joinToString()
         }
     }
 
