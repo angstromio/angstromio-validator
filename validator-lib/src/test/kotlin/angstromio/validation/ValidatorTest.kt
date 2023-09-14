@@ -572,11 +572,24 @@ class ValidatorTest : AssertViolationTest() {
 
         test("DataClassValidator#validateValue 2") {
             val descriptor = validator.getConstraintsForClass(TestClasses.OneOfListExample::class.java)
-            val violations = validator.validateValue<TestClasses.OneOfListExample>(descriptor, "enumValue", listOf("g"))
+            val violations = validator.validateValue<TestClasses.OneOfListExample>(descriptor, "enumValue", listOf("g"), false)
             violations.size shouldBeEqual 1
             val violation = violations.first()
             violation.message should be("g not one of [a, B, c]")
             violation.propertyPath.toString() should be("enumValue")
+            violation.invalidValue should be(listOf("g"))
+            violation.rootBeanClass should be(TestClasses.OneOfListExample::class.java)
+            violation.rootBean should beNull()
+            violation.leafBean should beNull()
+        }
+
+        test("DataClassValidator#validateValue 3") {
+            val descriptor = validator.getConstraintsForClass(TestClasses.OneOfListExample::class.java)
+            val violations = validator.validateValue<TestClasses.OneOfListExample>(descriptor, "enumValue", listOf("g"), true)
+            violations.size shouldBeEqual 1
+            val violation = violations.first()
+            violation.message should be("g not one of [a, B, c]")
+            violation.propertyPath.toString() should be("OneOfListExample.enumValue")
             violation.invalidValue should be(listOf("g"))
             violation.rootBeanClass should be(TestClasses.OneOfListExample::class.java)
             violation.rootBean should beNull()

@@ -47,7 +47,12 @@ internal object ConstraintValidatorFactoryHelper {
                     annotationClazz = constraintDescriptor.annotation.annotationClass.java
                 )
                 if (set.isEmpty()) {
-                    val configuration = context.path.toString().ifEmpty { clazz.simpleName }
+                    val configuration = when (context.rootClazz) {
+                        null ->
+                            context.path.toString().ifEmpty { clazz.simpleName }
+                        else ->
+                            context.rootClazz.simpleName + "." + context.path.toString().ifEmpty { clazz.simpleName }
+                    }
                     throw UnexpectedTypeException(
                         "No validator could be found for constraint '${constraintDescriptor.annotation.annotationClass}'" + " validating type '${clazz.name}'. " + "Check configuration for '$configuration'"
                     )

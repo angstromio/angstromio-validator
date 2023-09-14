@@ -182,7 +182,13 @@ class DataClassValidator(
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
         if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
-        return validateValue(getConstraintsForClass(beanType), propertyName, value, *groups)
+        return validateValue(
+            descriptor = getConstraintsForClass(beanType),
+            propertyName = propertyName,
+            value = value,
+            includeClassNameInPath = false,
+            groups = groups
+        )
     }
 
     /** @inheritDoc */
@@ -443,6 +449,7 @@ class DataClassValidator(
         descriptor: BeanDescriptor,
         propertyName: String,
         value: Any?,
+        includeClassNameInPath: Boolean,
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
         if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
@@ -451,6 +458,10 @@ class DataClassValidator(
             descriptor.constrainedProperties.find { it.propertyName == propertyName }) {
             null -> emptySet()
             else -> {
+                val path = PathImpl.createRootPath()
+                if (includeClassNameInPath) {
+                    path.addPropertyNode(descriptor.elementClass.simpleName)
+                }
                 validateDescriptor(
                     descriptor = propertyDescriptor,
                     context = ValidationContext(
@@ -458,7 +469,7 @@ class DataClassValidator(
                         rootClazz = descriptor.elementClass as Class<T>,
                         root = null,
                         leaf = null,
-                        path = PathImpl.createRootPath()
+                        path = path
                     ),
                     value = value,
                     groups = groups.toList()
@@ -703,7 +714,12 @@ class DataClassValidator(
                 )
             when (constraintValidator) {
                 null -> {
-                    val configuration = context.path.toString().ifEmpty { clazz.simpleName }
+                    val configuration = when (context.rootClazz) {
+                        null ->
+                            context.path.toString().ifEmpty { clazz.simpleName }
+                        else ->
+                            context.rootClazz.simpleName + "." + context.path.toString().ifEmpty { clazz.simpleName }
+                    }
                     throw UnexpectedTypeException(
                         "No validator could be found for constraint '${constraintDescriptor.annotation.annotationClass}'" +
                                 " validating type '${clazz.name}'. " + "Check configuration for '$configuration'"
