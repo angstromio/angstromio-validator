@@ -239,8 +239,9 @@ class DataClassValidator(
     ): Set<ConstraintViolation<T>> {
         val descriptor = getConstraintsForClass(obj::class.java)
         return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
-            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
-            else -> {
+            null -> // no constrained parameters in the method
+                emptySet()
+            else ->
                 validateParameters(
                     obj = obj,
                     executable = method,
@@ -248,7 +249,6 @@ class DataClassValidator(
                     parameterValues = parameterValues,
                     groups = groups.toList()
                 )
-            }
         }
     }
 
@@ -261,7 +261,8 @@ class DataClassValidator(
     ): Set<ConstraintViolation<T>> {
         val descriptor = getConstraintsForClass(obj::class.java)
         return when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
-            null -> throw java.lang.IllegalArgumentException("${method.name} is not method of ${descriptor.elementClass}.")
+            null -> // no constrained parameters in the method
+                emptySet()
             else -> {
                 val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
                 methodPath.addReturnValueNode()
@@ -288,15 +289,18 @@ class DataClassValidator(
         parameterValues: Array<Any?>,
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
-        val constructorDescriptor = descriptorFactory.describeConstructor(constructor)
-            ?: throw IllegalArgumentException("Cannot find constrained constructor descriptor for Constructor ${constructor.name}(${constructor.parameterTypes.joinToString()})")
-        return validateParameters(
-            obj = null,
-            executable = constructor,
-            executableDescriptor = constructorDescriptor,
-            parameterValues = parameterValues,
-            groups = groups.toList()
-        )
+        return when (val constructorDescriptor = descriptorFactory.describeConstructor(constructor)) {
+            null -> // no constrained parameters in the constructor
+                emptySet()
+            else ->
+             validateParameters(
+                obj = null,
+                executable = constructor,
+                executableDescriptor = constructorDescriptor,
+                parameterValues = parameterValues,
+                groups = groups.toList()
+            )
+        }
     }
 
     /** @inheritDoc */
@@ -309,7 +313,8 @@ class DataClassValidator(
         // is an actual constrained constructor of the given 'createdObject' instance.
         val descriptor = getConstraintsForClass(createdObject::class.java)
         return when (val constructorDescriptor = descriptor.getConstraintsForConstructor(*constructor.parameterTypes)) {
-            null -> emptySet() // not a constrained constructor
+            null -> // no constrained parameters in the constructor
+                emptySet()
             else -> {
                 val constructorPath = PathImpl.createPathForExecutable(getExecutableMetaData(constructor))
                 constructorPath.addReturnValueNode()
@@ -1206,6 +1211,11 @@ class DataClassValidator(
             val constraintValidatorContext: ConstraintValidatorContext =
                 constraintValidatorContextFactory
                     .newConstraintValidatorContext(context.path, constraintDescriptor)
+
+            if (validators.isEmpty()) throw UnexpectedTypeException(
+                "No validator could be found for constraint '${constraintDescriptor.annotation.annotationClass}' " +
+                        "validating type '${clazz.name}'. " +
+                        "Check configuration for '${context.path}'")
 
             validators.forEach { validator ->
                 if (!validator.isValid(value, constraintValidatorContext)) {
