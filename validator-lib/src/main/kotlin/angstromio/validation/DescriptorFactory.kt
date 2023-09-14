@@ -76,22 +76,16 @@ internal class DescriptorFactory(
         private fun getKFunctionParameterNamesFn(kFunction: KFunction<*>): List<String> =
             kFunction.parameters.filter { it.kind == KParameter.Kind.VALUE }.map { it.name!! }
 
-        private fun getExecutableParameterNamesFn(executable: Executable):  List<String> =
+        private fun getExecutableParameterNamesFn(executable: Executable): List<String> =
             when (executable) {
                 is Method ->
                     getKFunctionParameterNamesFn(executable.kotlinFunction!!)
+
                 is Constructor<*> ->
                     getKFunctionParameterNamesFn(executable.kotlinFunction!!)
             }
 
         private val DefaultGroupsList: List<Class<*>> = listOf(Default::class.java)
-
-        private fun combine(
-            annotationMap: Map<String, Array<Annotation>>,
-            key: String,
-            annotations: Array<Annotation>
-        ): Array<Annotation> =
-            (annotationMap[key] ?: emptyArray()).merge(annotations)
 
         private fun isCascadedValidation(annotations: Array<Annotation>): Boolean =
             annotations.find<Valid>() != null
@@ -191,9 +185,10 @@ internal class DescriptorFactory(
 
     private fun buildDescriptor(clazz: Class<*>): BeanDescriptor {
         val groups: List<Class<*>> = findGroupSequenceValues(clazz).toList()
+        val kClazz = clazz.kotlin
 
-        val kotlinConstructors = clazz.kotlin.constructors
-        val kotlinConstructor = clazz.kotlin.primaryConstructor
+        val kotlinConstructors = kClazz.constructors
+        val kotlinConstructor = kClazz.primaryConstructor
             ?: if (kotlinConstructors.isNotEmpty()) {
                 kotlinConstructors.first()
             } else null
@@ -742,28 +737,6 @@ internal class DescriptorFactory(
 
     private fun isConstraintAnnotation(annotation: Annotation): Boolean =
         validatorFactory.constraintHelper.isConstraintAnnotation(annotation.annotationClass.java)
-
-    // we include the built-up map of field/method annotations to over describe constructors, that
-    // is we consider them constrained if they have parameters that are constrained in any way in
-    // the class declaration.
-    private fun isConstrainedConstructor(
-        annotationMap: Map<String, Array<Annotation>>,
-        constructor: Constructor<*>
-    ): Boolean {
-        val constructorKFunction = constructor.kotlinFunction!!
-        val anyParameterConstrained = constructorKFunction.parameters.any { kParameter ->
-            val size = kParameter.annotations.size
-            val parameterAnnotations: Array<Annotation> = Array(size) { index ->
-                kParameter.annotations[index]
-            }
-            isConstrained(annotationMap[kParameter.name].merge(parameterAnnotations))
-        }
-        return isConstrained(constructor.annotations) || anyParameterConstrained
-    }
-
-    private fun isConstrainedMethod(method: Method): Boolean {
-        return isConstrained(method.annotations)
-    }
 
     // we translate constraints on constructor parameters and getter|setter methods to fields of the same name.
     private fun isConstrainedField(annotationMap: Map<String, Array<Annotation>>, field: Field): Boolean {
