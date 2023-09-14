@@ -51,12 +51,13 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Parameter
 import java.lang.reflect.Type
-import kotlin.reflect.KCallable
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
+import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaConstructor
+import kotlin.reflect.jvm.javaMethod
 import kotlin.reflect.jvm.jvmName
 import kotlin.reflect.jvm.kotlinFunction
 
@@ -151,23 +152,41 @@ internal class DescriptorFactory(
      * @note the returned [ExecutableDescriptor] is NOT cached. It is up to the caller of this
      *       method to optimize any calls to this method.
      */
-    fun describe(
-        executable: Executable,
+    fun <T : Any> describe(
+        kotlinFunction: KFunction<T>,
         mixinClazz: Class<*>?
     ): ExecutableDescriptor? {
-        val annotationMap =
+        val methodAnnotations =
             mixinClazz?.declaredMethods?.associate { mixinFunction ->
                 mixinFunction.name to mixinFunction.annotations
             } ?: emptyMap()
-        return when (executable) {
-            is Method ->
-                buildMethodDescriptor(annotationMap, executable)
 
-            is Constructor<*> ->
-                buildConstructorDescriptor(annotationMap, executable)
+        val fieldAnnotations =
+            mixinClazz?.kotlin?.memberProperties?.associate { mixinMemberProperty ->
+                mixinMemberProperty.name to mixinMemberProperty.annotations
+            } ?: emptyMap()
+        val annotationMap = mutableMapOf<String, Array<Annotation>>()
+        methodAnnotations.map { (key, value) ->
+            annotationMap[ClassHelper.unMaskMethodName(key)] = value
+        }
+        fieldAnnotations.map { (key, value) ->
+            val current = annotationMap[key]
+            if (current != null) {
+                annotationMap[key] = current.merge(value.toTypedArray())
+            } else {
+                annotationMap[key] = value.toTypedArray()
+            }
+        }
+
+        return when {
+            kotlinFunction.javaMethod != null ->
+                buildMethodDescriptor(annotationMap.toMap(), kotlinFunction.javaMethod!!)
+
+            kotlinFunction.javaConstructor != null ->
+                buildConstructorDescriptor(annotationMap.toMap(), kotlinFunction.javaConstructor!!)
 
             else ->
-                throw IllegalArgumentException()
+                throw IllegalArgumentException("Executable is not a ${Method::class.java.name} nor a ${Constructor::class.java.name}.")
         }
     }
 

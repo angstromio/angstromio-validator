@@ -56,7 +56,6 @@ import java.lang.reflect.Executable
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.*
-import kotlin.reflect.KCallable
 import kotlin.reflect.KFunction
 
 @Suppress("UNCHECKED_CAST")
@@ -182,13 +181,26 @@ class DataClassValidator(
         vararg groups: Class<*>
     ): Set<ConstraintViolation<T>> {
         if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
-        return validateValue(
-            descriptor = getConstraintsForClass(beanType),
-            propertyName = propertyName,
-            value = value,
-            includeClassNameInPath = false,
-            groups = groups
-        )
+        val descriptor = getConstraintsForClass(beanType)
+        return when (val propertyDescriptor =
+            descriptor.constrainedProperties.find { it.propertyName == propertyName }) {
+            null -> emptySet()
+            else -> {
+                val path = PathImpl.createRootPath()
+                validateDescriptor(
+                    descriptor = propertyDescriptor,
+                    context = ValidationContext(
+                        fieldName = propertyName,
+                        rootClazz = descriptor.elementClass as Class<T>,
+                        root = null,
+                        leaf = null,
+                        path = path
+                    ),
+                    value = value,
+                    groups = groups.toList()
+                )
+            }
+        }
     }
 
     /** @inheritDoc */
@@ -340,35 +352,21 @@ class DataClassValidator(
     // BEGIN: angstromio.validation.DataClassValidator methods ---------------------------------------------------------
 
     /**
-     * Returns a [ExecutableDescriptor] object describing a given [KCallable].
+     * Returns a [ExecutableDescriptor] object describing a given [Executable].
      *
      * The returned object (and associated objects including ExecutableDescriptors) are immutable.
      *
-     * @param executable the [KCallable] to describe.
+     * @param kotlinFunction the [KFunction] to describe.
      *
-     * @return the [ExecutableDescriptor] for the specified [KCallable]
+     * @return the [ExecutableDescriptor] for the specified [KFunction]
      *
      * @note the returned [ExecutableDescriptor] is NOT cached. It is up to the caller of this
      *       method to optimize any calls to this method.
      */
-    fun describeExecutable(
-        executable: Executable,
+    fun <T : Any> getConstraintsForKotlinFunction(
+        kotlinFunction: KFunction<T>,
         mixinClazz: Class<*>?
-    ): ExecutableDescriptor? = descriptorFactory.describe(executable, mixinClazz)
-
-    /**
-     * Returns a list of [ExecutableDescriptor] instances describing the `@PostConstructValidation`-annotated
-     * or otherwise constrained methods of the given data class type.
-     *
-     * @param clazz class or interface type evaluated
-     *
-     * @return a list of [ExecutableDescriptor] for `@PostConstructValidation`-annotated or otherwise
-     *         constrained methods of the class
-     *
-     * @note the returned [ExecutableDescriptor] instances are NOT cached. It is up to the caller of this
-     *       method to optimize any calls to this method.
-     */
-    fun describeMethods(clazz: Class<*>): List<MethodDescriptor> = descriptorFactory.describeMethods(clazz)
+    ): ExecutableDescriptor? = descriptorFactory.describe(kotlinFunction, mixinClazz)
 
     /**
      * Returns the set of Constraints which validate the given [Annotation] class.
@@ -437,54 +435,6 @@ class DataClassValidator(
     }
 
     /**
-     * Validates all constraint constraints on the `fieldName` field of the class described
-     * by the given [BeanDescriptor] if the `fieldName` field value were `value`.
-     *
-     * @param descriptor   the [BeanDescriptor] of the described class.
-     * @param propertyName field to validate.
-     * @param value        field value to validate.
-     * @param groups       the list of groups targeted for validation (defaults to Default).
-     * @param T the type of the object to validate
-     *
-     * @return constraint violations or an empty set if none
-     *
-     * @throws IllegalArgumentException - if fieldName is null, empty or not a valid object property.
-     */
-    fun <T : Any> validateValue(
-        descriptor: BeanDescriptor,
-        propertyName: String,
-        value: Any?,
-        includeClassNameInPath: Boolean,
-        vararg groups: Class<*>
-    ): Set<ConstraintViolation<T>> {
-        if (propertyName.isEmpty()) throw IllegalArgumentException("Invalid property path. Property path cannot be null or empty.")
-
-        return when (val propertyDescriptor =
-            descriptor.constrainedProperties.find { it.propertyName == propertyName }) {
-            null -> emptySet()
-            else -> {
-                val path = PathImpl.createRootPath()
-                if (includeClassNameInPath) {
-                    path.addPropertyNode(descriptor.elementClass.simpleName)
-                }
-                validateDescriptor(
-                    descriptor = propertyDescriptor,
-                    context = ValidationContext(
-                        fieldName = propertyName,
-                        rootClazz = descriptor.elementClass as Class<T>,
-                        root = null,
-                        leaf = null,
-                        path = path
-                    ),
-                    value = value,
-                    groups = groups.toList()
-                )
-            }
-        }
-
-    }
-
-    /**
      * Evaluates all known [ConstraintValidator] instances supporting the constraints represented by the
      * given mapping of [Annotation] to constraint attributes placed on a field `fieldName` if
      * the `fieldName` field value were `value`. The `fieldName` is used in error reporting (as the
@@ -542,7 +492,6 @@ class DataClassValidator(
         return results.toSet()
     }
 
-
     /**
      * If the given method is annotated with an @PostConstructValidation annotation, execute the validation given the
      * object instance. If the given method does not represent an @PostConstructValidation annotated method of the
@@ -596,10 +545,58 @@ class DataClassValidator(
         return results.toSet()
     }
 
+    /**
+     * Validates all constraints placed on the parameters of the given constructor.
+     *
+     * @return the set of failing validations.
+     */
+    fun validateConstructorParameters(
+        constructor: Constructor<Any>,
+        constructorDescriptor: ExecutableDescriptor?,
+        fieldNames: List<String>,
+        parameterValues: Array<Any?>,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<Any>> {
+        return if (constructorDescriptor != null) {
+            validateParameters(
+                obj = null,
+                executable = constructor,
+                executableDescriptor = constructorDescriptor,
+                fieldNames = fieldNames,
+                parameterValues = parameterValues,
+                groups = groups.toList()
+            )
+        } else emptySet()
+    }
 
-    // BEGIN: Private functions ----------------------------------------------------------------------------------------
+    /**
+     * Validates all constraints placed on the parameters of the given method.
+     *
+     * @return the set of failing validations.
+     */
+    fun validateParameters(
+        method: Method,
+        methodDescriptor: ExecutableDescriptor?,
+        fieldNames: List<String>,
+        parameterValues: Array<Any?>,
+        vararg groups: Class<*>
+    ): Set<ConstraintViolation<Any>> {
+        return if (methodDescriptor != null) {
+            validateParameters(
+                obj = null,
+                executable = method,
+                executableDescriptor = methodDescriptor,
+                fieldNames = fieldNames,
+                parameterValues = parameterValues,
+                groups = groups.toList()
+            )
+        } else emptySet()
+    }
+
 
     /* PRIVATE */
+
+    // BEGIN: Private functions ----------------------------------------------------------------------------------------
 
     // BEGIN: Recursive validation methods -----------------------------------------------------------------------------
 
@@ -1018,7 +1015,27 @@ class DataClassValidator(
         parameterValues: Array<Any?>,
         groups: List<Class<*>>
     ): Set<ConstraintViolation<T>> {
-        if (parameterValues.size != executable.parameterCount) {
+        val parameterNames = DescriptorFactory.getExecutableParameterNames(executable)
+        return validateParameters(
+            obj = obj,
+            executable = executable,
+            executableDescriptor = executableDescriptor,
+            fieldNames = parameterNames,
+            parameterValues = parameterValues,
+            groups = groups
+        )
+    }
+
+    private fun <T : Any> validateParameters(
+        obj: T?,
+        executable: Executable,
+        executableDescriptor: ExecutableDescriptor,
+        fieldNames: List<String>,
+        parameterValues: Array<Any?>,
+        groups: List<Class<*>>
+    ): Set<ConstraintViolation<T>> {
+        if (parameterValues.size != fieldNames.size ||
+            parameterValues.size != executable.parameterCount) {
             val executableAsString =
                 ExecutableHelper.getExecutableAsString(
                     /* name                 = */ executableDescriptor
@@ -1034,21 +1051,23 @@ class DataClassValidator(
 
         val rootBeanClazz = obj?.javaClass ?: executable.declaringClass as Class<T>
 
+        val executableParameterNames = DescriptorFactory.getExecutableParameterNames(executable)
+
         val results = mutableSetOf<ConstraintViolation<T>>()
-        val parameterNames = DescriptorFactory.getExecutableParameterNames(executable)
-        val size = parameterNames.size
+        val size = executableParameterNames.size
         var index = 0
         while (index < size) {
             val parameterValue = parameterValues[index]
-            val parameterName = parameterNames[index]
-            val parameterDescriptor = executableDescriptor.parameterDescriptors.find { it.name == parameterName }
+            val executableParameterName = executableParameterNames[index]
+            val fieldName = fieldNames[index]
+            val parameterDescriptor = executableDescriptor.parameterDescriptors.find { it.name == executableParameterName }
             when (parameterDescriptor) {
                 null -> Unit // not constrained -- skip
                 else -> {
                     parameterDescriptor.constraintDescriptors.forEach { constraintDescriptor: ConstraintDescriptor<*>? ->
                         val parameterPath = PathImpl.createPathForExecutable(getExecutableMetaData(executable))
                         val context = ValidationContext(
-                            fieldName = parameterDescriptor.name,
+                            fieldName = fieldName,
                             rootClazz = rootBeanClazz,
                             root = obj,
                             leaf = obj,
@@ -1056,7 +1075,7 @@ class DataClassValidator(
                         )
 
                         if (constraintDescriptor != null) {
-                            parameterPath.addParameterNode(parameterDescriptor.name, index)
+                            parameterPath.addParameterNode(fieldName, index)
                             results.addAll(
                                 validateConstraintDescriptor(
                                     context = context.copy(path = parameterPath),
