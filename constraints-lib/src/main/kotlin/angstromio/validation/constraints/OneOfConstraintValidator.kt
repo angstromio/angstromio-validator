@@ -48,11 +48,19 @@ internal class OneOfConstraintValidator : ConstraintValidator<OneOf, Any> {
         // an empty value is not one of the given values
         val valid = if (value.toNonEmptyListOrNull() == null) false else invalidValues.isEmpty()
         if (!valid) {
-            ConstraintValidatorContextBuilder.addExpressionVariable("validatedValue", value.joinToString())
+            ConstraintValidatorContextBuilder.addExpressionVariable("validatedValue", valueToString(value.toList()))
                 .withMessageTemplate(oneOf!!.message)
                 .addConstraintViolation(constraintValidatorContext)
         }
         return valid
+    }
+
+    private fun valueToString(value: List<*>): String {
+        return if (value.isEmpty()) {
+            "<empty>"
+        } else {
+            value.joinToString()
+        }
     }
 
     private fun findInvalidValues(

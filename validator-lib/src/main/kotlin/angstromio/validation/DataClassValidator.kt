@@ -563,12 +563,14 @@ class DataClassValidator(
         when (val methodDescriptor = descriptor.getConstraintsForMethod(method.name, *method.parameterTypes)) {
             null -> Unit
             else -> {
+                val returnValueDescriptor =  methodDescriptor.returnValueDescriptor
                 // if the method has an @PostConstructValidation annotation, run the validation
                 val constraintDescriptor: ConstraintDescriptorImpl<PostConstructValidation>? =
-                    methodDescriptor
-                        .returnValueDescriptor
-                        .constraintDescriptors
-                        .find { it.annotation.eq<PostConstructValidation>() } as? ConstraintDescriptorImpl<PostConstructValidation>
+                   if (returnValueDescriptor != null) {
+                           returnValueDescriptor
+                               .constraintDescriptors
+                                .find { it.annotation.eq<PostConstructValidation>() } as? ConstraintDescriptorImpl<PostConstructValidation>
+                       } else null
 
                 constraintDescriptor.whenNotNull { notNullConstraintDescriptor ->
                     val methodPath = PathImpl.createPathForExecutable(getExecutableMetaData(method))
