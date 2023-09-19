@@ -3,11 +3,11 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
 }
 
-rootProject.name = 'angstromio-validator'
+rootProject.name = 'angstromio-validator-multiproject'
 include 'constraints-lib', 'validator-lib'
 
 // For Local
-if (file('../angstromio-util').exists()) {
+if (file('../angstromio-util').exists() && !hasProperty('publishing')) {
     includeBuild('../angstromio-util') {
         dependencySubstitution {
             substitute module('io.angstrom:angstromio-util') using project(':util-lib')
@@ -15,7 +15,7 @@ if (file('../angstromio-util').exists()) {
     }
 }
 // for GitHub Actions
-if (file('angstromio-util').exists()) {
+if (file('angstromio-util').exists() && !hasProperty('publishing')) {
     includeBuild('angstromio-util') {
         dependencySubstitution {
             substitute module('io.angstrom:angstromio-util') using project(':util-lib')
