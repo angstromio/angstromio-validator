@@ -3,11 +3,36 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
 }
 
-rootProject.name = 'angstromio-validator-multiproject'
-include 'constraints-lib', 'validator-lib'
+rootProject.name = 'angstromio-validator'
+include 'validator-constraints-lib', 'validator-lib'
+
+ def angstromioVersion = '0.0.1'
+
+ dependencyResolutionManagement {
+     versionCatalogs {
+         libs {
+             version('jacoco', '0.8.10')
+             version('junit', '5.8.1')
+             version('kotest', '5.6.2')
+             version('kotlin', '1.9.10')
+             version('angstromio', angstromioVersion)
+             library('arrow-core', 'io.arrow-kt:arrow-core:1.2.0')
+             library('angstromio-util', 'io.angstrom', 'angstromio-util').versionRef('angstromio')
+             library('hibernate-validator', 'org.hibernate.validator:hibernate-validator:8.0.1.Final')
+             library('jakarta-api', 'jakarta.validation:jakarta.validation-api:3.0.2')
+             library('junit-jupiter-api', 'org.junit.jupiter', 'junit-jupiter-api').versionRef('junit')
+             library('junit-jupiter-engine', 'org.junit.jupiter', 'junit-jupiter-engine').versionRef('junit')
+             library('kotest-runner', 'io.kotest', 'kotest-runner-junit5').versionRef('kotest')
+             library('kotest-assertions', 'io.kotest', 'kotest-assertions-core').versionRef('kotest')
+             library('kotest-property', 'io.kotest', 'kotest-property').versionRef('kotest')
+             library('kotlin-reflect', 'org.jetbrains.kotlin', 'kotlin-reflect').versionRef('kotlin')
+             library('kotlin-stdlib', 'org.jetbrains.kotlin', 'kotlin-stdlib').versionRef('kotlin')
+         }
+     }
+ }
 
 // For Local
-if (file('../angstromio-util').exists() && !hasProperty('publishing')) {
+if (file('../angstromio-util').exists() && !hasProperty('publish')) {
     includeBuild('../angstromio-util') {
         dependencySubstitution {
             substitute module('io.angstrom:angstromio-util') using project(':util-lib')
@@ -15,7 +40,7 @@ if (file('../angstromio-util').exists() && !hasProperty('publishing')) {
     }
 }
 // for GitHub Actions
-if (file('angstromio-util').exists() && !hasProperty('publishing')) {
+if (file('angstromio-util').exists() && !hasProperty('publish')) {
     includeBuild('angstromio-util') {
         dependencySubstitution {
             substitute module('io.angstrom:angstromio-util') using project(':util-lib')
