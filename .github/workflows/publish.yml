@@ -1,4 +1,4 @@
-# Runs on a cron trigger or manually via a repository dispatch event:
+# Runs via a workflow dispatch event or repository dispatch event:
 #
 # { "event_type": "publish" }
 #
@@ -53,11 +53,8 @@ jobs:
           private_key: ${{ secrets.API_ACCESS_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: "angstromio-flags"
-#      - name: Trigger angstromio/angstromio-flags Publish
-#        env:
-#          GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
-#        run: |
-#          gh workflow run publish.yml --ref main --repo angstromio/angstromio-flags
-#          sleep 5
-#          gh run watch --repo angstromio/angstromio-flags $(gh run list --repo angstromio/angstromio-flags -w workflow.yaml -L1 --json databaseId --jq .[0].databaseId)
-
+      - name: Trigger angstromio/angstromio-flags Publish
+        env:
+          GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
+        run: |
+          gh workflow run publish.yml --ref main --repo angstromio/angstromio-flags
