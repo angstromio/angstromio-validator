@@ -22,7 +22,7 @@ plugins {
 
 description = 'Constraint annotations for angstromio-validator.'
 group 'io.angstrom'
-version '0.0.1-SNAPSHOT'
+version project['io.angstrom.version']
 
 def artifactName = "angstromio-" + project.name.minus('-lib')
 
@@ -84,7 +84,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.angstrom:angstromio-util:0.0.1-SNAPSHOT'
+    implementation "io.angstrom:angstromio-util:${project['io.angstrom.version']}"
     implementation 'io.arrow-kt:arrow-core:1.2.0'
     implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.10'

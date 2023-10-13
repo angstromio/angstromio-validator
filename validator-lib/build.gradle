@@ -22,7 +22,7 @@ plugins {
 
 description = 'A Jakarta validator in Kotlin.'
 group 'io.angstrom'
-version '0.0.1-SNAPSHOT'
+version project['io.angstrom.version']
 
 def artifactName = "angstromio-" + project.name.minus('-lib')
 
@@ -98,7 +98,7 @@ dependencies {
     implementation project(':validator-constraints-lib')
 
     implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
-    implementation 'io.angstrom:angstromio-util:0.0.1-SNAPSHOT'
+    implementation "io.angstrom:angstromio-util:${project['io.angstrom.version']}"
     implementation 'io.arrow-kt:arrow-core:1.2.0'
     implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
     implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
