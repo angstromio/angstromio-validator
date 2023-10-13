@@ -86,6 +86,10 @@ tasks.named('jar') {
 }
 
 repositories {
+    maven {
+        name = 'Sonatype Snapshot Releases'
+        url = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+    }
     // Use Maven Central for resolving dependencies.
     mavenCentral()
 }
