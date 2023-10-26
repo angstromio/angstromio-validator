@@ -65,6 +65,11 @@ class DataClassValidator(
 ) : Validator, ExecutableValidator {
 
     companion object {
+        init {
+            // force Hibernate Validator to use slf4j-api for logging
+            System.setProperty("org.jboss.logging.provider", "slf4j")
+        }
+
         /** The size of the caffeine cache that is used to store reflection data on a validated data class. */
         private const val DEFAULT_DESCRIPTOR_CACHE_SIZE: Long = 128
 
